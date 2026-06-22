@@ -1,0 +1,16 @@
+# Vendored copy of the canonical repo-root shared/ backbone. Created at build
+# time by `make pack AGENT=custodian-search-agent` (rsync). It is a BUILD
+# ARTIFACT, not source — the canonical source lives at <repo>/shared/. Never
+# commit it.
+shared/
+
+# UiPath CLI build outputs.
+.uipath/
+__uipath/
+
+# Local virtualenv.
+.venv/
+
+# Python caches.
+__pycache__/
+*.pyc

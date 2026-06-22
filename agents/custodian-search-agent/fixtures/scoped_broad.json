@@ -1,0 +1,15 @@
+{
+  "case_id": "case-journey-B",
+  "jurisdiction": "federal_foia",
+  "request_id": "REQ-B-0001",
+  "subject": "Records concerning the agency's information-technology modernization program in 2023, including the contracting, the internal decision-making, and any public communications about it.",
+  "track": "complex",
+  "record_types": ["email", "memo", "report", "contract"],
+  "departments_hint": [],
+  "extracted_fields": {
+    "date_from": "2023-01-01",
+    "date_to": "2023-12-31",
+    "subject_detail": "IT modernization program"
+  },
+  "available_departments": ["Office of Procurement", "Office of the CIO", "Office of Communications"]
+}

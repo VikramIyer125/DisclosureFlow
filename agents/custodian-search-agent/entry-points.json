@@ -1,0 +1,215 @@
+{
+    "$schema": "https://cloud.uipath.com/draft/2024-12/entry-point",
+    "$id": "entry-points.json",
+    "entryPoints": [
+        {
+            "filePath": "agent",
+            "uniqueId": "e1751554-3dd4-4ce1-a56c-4f73a9b3ee76",
+            "type": "agent",
+            "input": {
+                "type": "object",
+                "properties": {
+                    "case_id": {
+                        "description": "Maestro case id; threaded onto every SearchTask.",
+                        "title": "Case Id",
+                        "type": "string"
+                    },
+                    "jurisdiction": {
+                        "default": "federal_foia",
+                        "description": "Legal regime; only 'federal_foia' in MVP, passed as a real param.",
+                        "title": "Jurisdiction",
+                        "type": "string"
+                    },
+                    "request_id": {
+                        "description": "Originating Request.request_id (for audit / dead-letter context).",
+                        "title": "Request Id",
+                        "type": "string"
+                    },
+                    "subject": {
+                        "description": "Normalized subject of the request (the search target).",
+                        "title": "Subject",
+                        "type": "string"
+                    },
+                    "track": {
+                        "default": "standard",
+                        "description": "Triage track from scoping; informs breadth of tasking.",
+                        "enum": [
+                            "fast_track",
+                            "standard",
+                            "complex"
+                        ],
+                        "title": "Track",
+                        "type": "string"
+                    },
+                    "record_types": {
+                        "description": "Record types in scope (e.g. ['email','memo']); may be empty.",
+                        "items": {
+                            "type": "string"
+                        },
+                        "title": "Record Types",
+                        "type": "array"
+                    },
+                    "departments_hint": {
+                        "description": "Departments the requester explicitly named; a strong hint, not binding.",
+                        "items": {
+                            "type": "string"
+                        },
+                        "title": "Departments Hint",
+                        "type": "array"
+                    },
+                    "extracted_fields": {
+                        "additionalProperties": {
+                            "type": "string"
+                        },
+                        "description": "Normalized fields (date_from/date_to/parties/subject_detail) to seed search terms.",
+                        "title": "Extracted Fields",
+                        "type": "object"
+                    },
+                    "available_departments": {
+                        "description": "The department universe to choose from (injected; from RecordStore.list_departments).",
+                        "items": {
+                            "type": "string"
+                        },
+                        "title": "Available Departments",
+                        "type": "array"
+                    }
+                },
+                "required": [
+                    "case_id",
+                    "request_id",
+                    "subject",
+                    "available_departments"
+                ]
+            },
+            "output": {
+                "type": "object",
+                "properties": {
+                    "tasks": {
+                        "description": "The custodian fan-out plan: one SearchTask per chosen department.",
+                        "items": {
+                            "additionalProperties": false,
+                            "description": "One department search task in the custodian fan-out (\u00a72 stage 3, \u00a710).\n\nEmitted (as a list) by the Custodian/Search agent. `task_id` is the\ndeterministic discriminator feeding the \u00a78.5 idempotency key for the\nrecord-store query side effect.",
+                            "properties": {
+                                "case_id": {
+                                    "description": "Maestro case instance id; ties every contract to one case.",
+                                    "title": "Case Id",
+                                    "type": "string"
+                                },
+                                "jurisdiction": {
+                                    "default": "federal_foia",
+                                    "description": "Legal regime. Only 'federal_foia' in MVP; kept a str so new regimes are additive.",
+                                    "title": "Jurisdiction",
+                                    "type": "string"
+                                },
+                                "task_id": {
+                                    "description": "Deterministic id for this department task; feeds \u00a78.5 query key.",
+                                    "title": "Task Id",
+                                    "type": "string"
+                                },
+                                "department": {
+                                    "description": "Target department repository.",
+                                    "title": "Department",
+                                    "type": "string"
+                                },
+                                "terms": {
+                                    "additionalProperties": false,
+                                    "description": "Search terms the Custodian/Search agent hands to a department repository (\u00a77).",
+                                    "properties": {
+                                        "keywords": {
+                                            "description": "Free-text keywords to match.",
+                                            "items": {
+                                                "type": "string"
+                                            },
+                                            "title": "Keywords",
+                                            "type": "array"
+                                        },
+                                        "date_from": {
+                                            "format": "date-time",
+                                            "type": "string"
+                                        },
+                                        "date_to": {
+                                            "format": "date-time",
+                                            "type": "string"
+                                        },
+                                        "record_types": {
+                                            "description": "Optional record-type filter, e.g. ['email','memo'].",
+                                            "items": {
+                                                "type": "string"
+                                            },
+                                            "title": "Record Types",
+                                            "type": "array"
+                                        }
+                                    },
+                                    "title": "SearchTerms",
+                                    "type": "object"
+                                }
+                            },
+                            "required": [
+                                "case_id",
+                                "task_id",
+                                "department",
+                                "terms"
+                            ],
+                            "title": "SearchTask",
+                            "type": "object"
+                        },
+                        "title": "Tasks",
+                        "type": "array"
+                    }
+                },
+                "required": [
+                    "tasks"
+                ]
+            },
+            "graph": {
+                "nodes": [
+                    {
+                        "id": "__start__",
+                        "name": "__start__",
+                        "type": "__start__",
+                        "subgraph": null,
+                        "metadata": {}
+                    },
+                    {
+                        "id": "plan",
+                        "name": "plan",
+                        "type": "node",
+                        "subgraph": null,
+                        "metadata": {}
+                    },
+                    {
+                        "id": "assemble",
+                        "name": "assemble",
+                        "type": "node",
+                        "subgraph": null,
+                        "metadata": {}
+                    },
+                    {
+                        "id": "__end__",
+                        "name": "__end__",
+                        "type": "__end__",
+                        "subgraph": null,
+                        "metadata": {}
+                    }
+                ],
+                "edges": [
+                    {
+                        "source": "__start__",
+                        "target": "plan",
+                        "label": null
+                    },
+                    {
+                        "source": "plan",
+                        "target": "assemble",
+                        "label": null
+                    },
+                    {
+                        "source": "assemble",
+                        "target": "__end__",
+                        "label": null
+                    }
+                ]
+            }
+        }
+    ]
+}

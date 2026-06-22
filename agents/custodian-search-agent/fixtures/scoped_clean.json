@@ -1,0 +1,16 @@
+{
+  "case_id": "case-journey-A",
+  "jurisdiction": "federal_foia",
+  "request_id": "REQ-A-0001",
+  "subject": "Email correspondence between the Office of Procurement and Acme Logistics LLC regarding contract #PR-2024-118 (janitorial services), Jan 1 2024 - Mar 31 2024.",
+  "track": "fast_track",
+  "record_types": ["email"],
+  "departments_hint": ["Office of Procurement"],
+  "extracted_fields": {
+    "date_from": "2024-01-01",
+    "date_to": "2024-03-31",
+    "parties": "Acme Logistics LLC",
+    "subject_detail": "contract #PR-2024-118 janitorial services"
+  },
+  "available_departments": ["Office of Procurement", "Office of the CIO", "Office of Communications"]
+}

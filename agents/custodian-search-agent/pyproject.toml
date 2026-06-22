@@ -1,0 +1,11 @@
+[project]
+name = "disclosureflow-custodian-search-agent"
+version = "0.0.1"
+description = "DisclosureFlow Custodian/Search LangGraph coded agent (brief §3): given a ScopedRequest and the available department universe, picks the subset of departments to task and generates per-department search terms. Returns SearchTask[] (wrapped in a thin SearchPlan envelope)."
+authors = [{ name = "Vikram Iyer", email = "vikramiyer@berkeley.edu" }]
+dependencies = [
+    "uipath-langchain>=0.12.0, <0.13.0",
+    "pydantic>=2,<3",
+    "langchain-anthropic>=0.3, <0.4",
+]
+requires-python = ">=3.11"

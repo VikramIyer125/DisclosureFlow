@@ -1,0 +1,6 @@
+{
+  "ProjectType": "Agent",
+  "Name": "disclosureflow-custodian-search-agent",
+  "Description": "DisclosureFlow Custodian/Search LangGraph coded agent (brief \u00a73): given a ScopedRequest and the available department universe, picks the subset of departments to task and generates per-department search terms. Returns SearchTask[] (wrapped in a thin SearchPlan envelope).",
+  "MainFile": null
+}
