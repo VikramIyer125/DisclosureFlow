@@ -1,0 +1,22 @@
+# Vendored copy of the canonical repo-root shared/ backbone. Created at build
+# time by `make pack AGENT=review-redaction-agent` (rsync). It is a BUILD
+# ARTIFACT, not source — the canonical source lives at <repo>/shared/. Never
+# commit it.
+shared/
+
+# Vendored copy of the canonical repo-root policy-packs/ (the federal-foia pack
+# JSON). Also a build artifact: this is the FIRST agent that uses the policy-pack
+# data, so the pack must travel inside the nupkg. The canonical source lives at
+# <repo>/policy-packs/. Never commit the vendored copy.
+policy-packs/
+
+# UiPath CLI build outputs.
+.uipath/
+__uipath/
+
+# Local virtualenv.
+.venv/
+
+# Python caches.
+__pycache__/
+*.pyc

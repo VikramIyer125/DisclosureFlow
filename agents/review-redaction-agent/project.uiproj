@@ -1,0 +1,6 @@
+{
+  "ProjectType": "Agent",
+  "Name": "disclosureflow-review-redaction-agent",
+  "Description": "DisclosureFlow Review & Redaction LangGraph coded agent (brief \u00a73, the hero): per-record responsiveness review, exemption classification (5/6/7(C)) grounded in the PolicyProvider, a source-grounded foreseeable-harm rationale per redaction, the data-driven exemption test, and a DERIVED confidence signal (\u00a78.1). Returns RedactionProposal[] (wrapped in a thin ReviewResult envelope), \u00a78.3-validated at the boundary.",
+  "MainFile": null
+}

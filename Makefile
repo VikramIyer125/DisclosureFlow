@@ -27,6 +27,17 @@ RSYNC := rsync -a --delete \
 	--exclude='pyproject.toml' \
 	shared/ $(AGENT_DIR)/shared/
 
+# Agents that ALSO need the policy-packs/ data vendored in (the Review & Redaction
+# agent is the first/only seam consumer of the federal-foia pack JSON). The pack
+# lives OUTSIDE shared/ and is a .json (not a .py), so it must be copied separately
+# into the agent dir AND bundled by `uipath pack` via packOptions.fileExtensions-
+# Included (".json"). The vendored policy-packs/ is gitignored in the agent dir.
+PACK_DATA_AGENTS := review-redaction-agent
+RSYNC_POLICY := rsync -a --delete \
+	--exclude='__pycache__' \
+	--exclude='*.pyc' \
+	policy-packs/ $(AGENT_DIR)/policy-packs/
+
 .PHONY: _check vendor init pack publish clean-vendor
 
 _check:
@@ -38,6 +49,10 @@ _check:
 vendor: _check
 	@echo ">> Vendoring shared/ into $(AGENT_DIR)/shared/"
 	@$(RSYNC)
+	@if echo " $(PACK_DATA_AGENTS) " | grep -q " $(AGENT) "; then \
+		echo ">> Vendoring policy-packs/ into $(AGENT_DIR)/policy-packs/"; \
+		$(RSYNC_POLICY); \
+	fi
 
 init: vendor
 	@echo ">> uipath init in $(AGENT_DIR)"
@@ -56,3 +71,5 @@ publish: pack
 clean-vendor: _check
 	@echo ">> Removing vendored shared/ from $(AGENT_DIR)"
 	@rm -rf $(AGENT_DIR)/shared
+	@echo ">> Removing vendored policy-packs/ from $(AGENT_DIR)"
+	@rm -rf $(AGENT_DIR)/policy-packs

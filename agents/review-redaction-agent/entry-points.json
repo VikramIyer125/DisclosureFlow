@@ -1,0 +1,538 @@
+{
+    "$schema": "https://cloud.uipath.com/draft/2024-12/entry-point",
+    "$id": "entry-points.json",
+    "entryPoints": [
+        {
+            "filePath": "agent",
+            "uniqueId": "24e57db3-91c8-44ae-ba5b-ffbff27bac04",
+            "type": "agent",
+            "input": {
+                "type": "object",
+                "properties": {
+                    "case_id": {
+                        "description": "Maestro case id; threaded onto every RedactionProposal.",
+                        "title": "Case Id",
+                        "type": "string"
+                    },
+                    "jurisdiction": {
+                        "default": "federal_foia",
+                        "description": "Legal regime; only 'federal_foia' in MVP, passed as a real param.",
+                        "title": "Jurisdiction",
+                        "type": "string"
+                    },
+                    "records": {
+                        "description": "The candidate records to review (from the record-store fan-out).",
+                        "items": {
+                            "additionalProperties": false,
+                            "description": "A record returned by a department repository (\u00a72 stage 3, \u00a710, \u00a78.4).\n\n`content_hash` (sha256 of the source bytes) starts the release-integrity\nchain (\u00a78.4) \u2014 every later hash is verified back toward it. `is_responsive`\nis ``None`` until the Review agent decides; ``True``/``False`` afterwards.",
+                            "properties": {
+                                "case_id": {
+                                    "description": "Maestro case instance id; ties every contract to one case.",
+                                    "title": "Case Id",
+                                    "type": "string"
+                                },
+                                "jurisdiction": {
+                                    "default": "federal_foia",
+                                    "description": "Legal regime. Only 'federal_foia' in MVP; kept a str so new regimes are additive.",
+                                    "title": "Jurisdiction",
+                                    "type": "string"
+                                },
+                                "record_ref": {
+                                    "description": "Stable id of the record within its repository.",
+                                    "title": "Record Ref",
+                                    "type": "string"
+                                },
+                                "department": {
+                                    "description": "Department repository the record came from.",
+                                    "title": "Department",
+                                    "type": "string"
+                                },
+                                "record_type": {
+                                    "description": "Coarse record class, e.g. 'email'.",
+                                    "title": "Record Type",
+                                    "type": "string"
+                                },
+                                "task_id": {
+                                    "description": "SearchTask.task_id that surfaced this record.",
+                                    "title": "Task Id",
+                                    "type": "string"
+                                },
+                                "content_hash": {
+                                    "description": "sha256 of source bytes. Starts the \u00a78.4 integrity chain. Strict: never coerce.",
+                                    "title": "Content Hash",
+                                    "type": "string"
+                                },
+                                "is_responsive": {
+                                    "type": "boolean"
+                                },
+                                "text": {
+                                    "type": "string"
+                                },
+                                "uri": {
+                                    "type": "string"
+                                }
+                            },
+                            "required": [
+                                "case_id",
+                                "record_ref",
+                                "department",
+                                "record_type",
+                                "task_id",
+                                "content_hash"
+                            ],
+                            "title": "CandidateRecord",
+                            "type": "object"
+                        },
+                        "title": "Records",
+                        "type": "array"
+                    }
+                },
+                "required": [
+                    "case_id",
+                    "records"
+                ]
+            },
+            "output": {
+                "type": "object",
+                "properties": {
+                    "proposals": {
+                        "description": "Every proposed withholding across all records (each \u00a78.3-validated, confidence DERIVED).",
+                        "items": {
+                            "additionalProperties": false,
+                            "description": "A proposed withholding from the Review & Redaction agent (\u00a73, \u00a78.1, \u00a78.3, \u00a710).\n\nThe hero contract. Every field that grounds a withholding is here: the\n`rule_id` (validated \u2208 the PolicyProvider's returned set, \u00a78.3), the\n`citation` and `rationale` (source-grounded, foreseeable-harm), the generic\n`test_result`, and the DERIVED `confidence`. `retrieved_corrections` are\nadvisory only and surface into human review (\u00a77); they never set rule_id or\nconfidence.",
+                            "properties": {
+                                "pack_id": {
+                                    "description": "PolicyProvider pack id, e.g. 'federal-foia'.",
+                                    "title": "Pack Id",
+                                    "type": "string"
+                                },
+                                "pack_version": {
+                                    "description": "Pack semantic version the decision was grounded in.",
+                                    "title": "Pack Version",
+                                    "type": "string"
+                                },
+                                "case_id": {
+                                    "description": "Maestro case instance id; ties every contract to one case.",
+                                    "title": "Case Id",
+                                    "type": "string"
+                                },
+                                "jurisdiction": {
+                                    "default": "federal_foia",
+                                    "description": "Legal regime. Only 'federal_foia' in MVP; kept a str so new regimes are additive.",
+                                    "title": "Jurisdiction",
+                                    "type": "string"
+                                },
+                                "record_ref": {
+                                    "description": "Record this redaction applies to (validated in-scope, \u00a78.3).",
+                                    "title": "Record Ref",
+                                    "type": "string"
+                                },
+                                "span": {
+                                    "additionalProperties": false,
+                                    "description": "A located region inside a record (the unit a redaction or correction targets).\n\n`unit` defaults to ``\"char\"``; ``\"token\"`` and ``\"page_bbox\"`` are carried so a\nfuture document-understanding backing can address regions natively without a\ncontract change.",
+                                    "properties": {
+                                        "record_ref": {
+                                            "description": "Stable id of the record this span lives in.",
+                                            "title": "Record Ref",
+                                            "type": "string"
+                                        },
+                                        "start": {
+                                            "description": "Inclusive start offset in `unit`s.",
+                                            "minimum": 0,
+                                            "title": "Start",
+                                            "type": "integer"
+                                        },
+                                        "end": {
+                                            "description": "Exclusive end offset in `unit`s.",
+                                            "minimum": 0,
+                                            "title": "End",
+                                            "type": "integer"
+                                        },
+                                        "unit": {
+                                            "default": "char",
+                                            "description": "Addressing unit for start/end.",
+                                            "enum": [
+                                                "char",
+                                                "token",
+                                                "page_bbox"
+                                            ],
+                                            "title": "Unit",
+                                            "type": "string"
+                                        },
+                                        "quote": {
+                                            "type": "string"
+                                        }
+                                    },
+                                    "required": [
+                                        "record_ref",
+                                        "start",
+                                        "end"
+                                    ],
+                                    "title": "Span",
+                                    "type": "object"
+                                },
+                                "rule_id": {
+                                    "description": "PolicyProvider rule id grounding the withholding. Validated \u2208 returned set (\u00a78.3). Strict.",
+                                    "title": "Rule Id",
+                                    "type": "string"
+                                },
+                                "citation": {
+                                    "description": "Statutory citation copied from the grounding Rule.",
+                                    "title": "Citation",
+                                    "type": "string"
+                                },
+                                "rationale": {
+                                    "description": "Source-grounded, foreseeable-harm rationale for withholding.",
+                                    "title": "Rationale",
+                                    "type": "string"
+                                },
+                                "test_result": {
+                                    "additionalProperties": false,
+                                    "description": "Generic, data-driven result of applying a rule's legal test (spec item 4).\n\n`elements` is keyed by element name; the *required* names come from\n`Rule.required_test_elements`, never hardcoded here. The \u00a78.3 completeness\ncheck lives in ``shared.contracts.validation`` as a pure function, not a\nmodel validator, because a failure is control flow (re-prompt OR route to\nhuman) that sits above the type.",
+                                    "properties": {
+                                        "test": {
+                                            "description": "Which legal-test family was applied (mirrors the Rule.test).",
+                                            "enum": [
+                                                "categorical",
+                                                "balancing",
+                                                "foreseeable_harm"
+                                            ],
+                                            "title": "Test",
+                                            "type": "string"
+                                        },
+                                        "elements": {
+                                            "additionalProperties": {
+                                                "additionalProperties": false,
+                                                "description": "One filled element of a legal test (\u00a78.1b, \u00a78.3).\n\n`hedged=True` or an empty `value`/`evidence` marks the element as incomplete,\nwhich the confidence derivation reads as low confidence and the \u00a78.3 validator\nreads as a completeness violation.",
+                                                "properties": {
+                                                    "value": {
+                                                        "description": "The agent's finding for this element.",
+                                                        "title": "Value",
+                                                        "type": "string"
+                                                    },
+                                                    "evidence": {
+                                                        "description": "Source-grounded support for the finding.",
+                                                        "title": "Evidence",
+                                                        "type": "string"
+                                                    },
+                                                    "hedged": {
+                                                        "default": false,
+                                                        "description": "True if the model hedged/was uncertain on this element.",
+                                                        "title": "Hedged",
+                                                        "type": "boolean"
+                                                    }
+                                                },
+                                                "required": [
+                                                    "value",
+                                                    "evidence"
+                                                ],
+                                                "title": "TestElement",
+                                                "type": "object"
+                                            },
+                                            "description": "element_name -> filled TestElement.",
+                                            "title": "Elements",
+                                            "type": "object"
+                                        }
+                                    },
+                                    "required": [
+                                        "test"
+                                    ],
+                                    "title": "ExemptionTestResult",
+                                    "type": "object"
+                                },
+                                "confidence": {
+                                    "additionalProperties": false,
+                                    "description": "DERIVED routing signal \u2014 never a field the LLM fills (spec item 5, \u00a78.1).\n\nProduced only by ``derive_confidence`` (``shared.contracts.confidence``),\nwhich encodes the \u00a78.1 priority order. Recorded on the proposal as evidence\nof *why* the proposal routes the way it does.",
+                                    "properties": {
+                                        "level": {
+                                            "description": "Routing level: 'low' forces close scrutiny / full review.",
+                                            "enum": [
+                                                "high",
+                                                "low"
+                                            ],
+                                            "title": "Level",
+                                            "type": "string"
+                                        },
+                                        "derivation": {
+                                            "enum": [
+                                                "balancing_always_full_review",
+                                                "incomplete_test_elements",
+                                                "self_consistency_disagreement"
+                                            ],
+                                            "type": "string"
+                                        },
+                                        "self_consistency": {
+                                            "additionalProperties": false,
+                                            "description": "Optional self-consistency sampling result (\u00a78.1c, stretch).",
+                                            "properties": {
+                                                "samples": {
+                                                    "description": "Number of samples drawn for the exemption classification.",
+                                                    "minimum": 1,
+                                                    "title": "Samples",
+                                                    "type": "integer"
+                                                },
+                                                "agreement": {
+                                                    "description": "Fraction of samples agreeing on the classification.",
+                                                    "maximum": 1.0,
+                                                    "minimum": 0.0,
+                                                    "title": "Agreement",
+                                                    "type": "number"
+                                                }
+                                            },
+                                            "required": [
+                                                "samples",
+                                                "agreement"
+                                            ],
+                                            "title": "SelfConsistencySignal",
+                                            "type": "object"
+                                        }
+                                    },
+                                    "required": [
+                                        "level"
+                                    ],
+                                    "title": "ConfidenceSignal",
+                                    "type": "object"
+                                },
+                                "retrieved_corrections": {
+                                    "description": "Advisory corrections surfaced into review (\u00a77). Never authoritative.",
+                                    "items": {
+                                        "additionalProperties": false,
+                                        "description": "An officer correction stored with grounding in the corrections log (\u00a77).\n\nAdvisory only: a stored correction informs a future proposal but can never\nset `rule_id` or confidence or bypass the PolicyProvider / human gate. The\ngrounding fields exist so a future retrieval backing has something to\nretrieve and surface into human review.",
+                                        "properties": {
+                                            "direction": {
+                                                "description": "Whether the officer removed an over-redaction or added a missed one.",
+                                                "enum": [
+                                                    "over_redaction_rejected",
+                                                    "missed_redaction_added"
+                                                ],
+                                                "title": "Direction",
+                                                "type": "string"
+                                            },
+                                            "record_context": {
+                                                "additionalProperties": false,
+                                                "description": "Context used to retrieve advisory corrections (\u00a77 CorrectionsMemory).\n\nIntentionally lightweight: `record_type` + a `snippet` are enough for the\nMVP exact-match/recency retrieval; `embedding` stays ``None`` until the\nLlamaIndex stretch backing fills it. Carrying it now means the retrieval\nseam has something to key on without a later contract change.",
+                                                "properties": {
+                                                    "record_type": {
+                                                        "description": "Coarse record class, e.g. 'email', 'memo', 'spreadsheet'.",
+                                                        "title": "Record Type",
+                                                        "type": "string"
+                                                    },
+                                                    "snippet": {
+                                                        "type": "string"
+                                                    },
+                                                    "embedding": {
+                                                        "items": {
+                                                            "type": "number"
+                                                        },
+                                                        "type": "array"
+                                                    }
+                                                },
+                                                "required": [
+                                                    "record_type"
+                                                ],
+                                                "title": "RecordContext",
+                                                "type": "object"
+                                            },
+                                            "rule_id": {
+                                                "description": "Rule the correction concerned (security-critical: strict).",
+                                                "title": "Rule Id",
+                                                "type": "string"
+                                            },
+                                            "rationale": {
+                                                "description": "Officer's reasoning for the correction.",
+                                                "title": "Rationale",
+                                                "type": "string"
+                                            },
+                                            "span": {
+                                                "additionalProperties": false,
+                                                "description": "A located region inside a record (the unit a redaction or correction targets).\n\n`unit` defaults to ``\"char\"``; ``\"token\"`` and ``\"page_bbox\"`` are carried so a\nfuture document-understanding backing can address regions natively without a\ncontract change.",
+                                                "properties": {
+                                                    "record_ref": {
+                                                        "description": "Stable id of the record this span lives in.",
+                                                        "title": "Record Ref",
+                                                        "type": "string"
+                                                    },
+                                                    "start": {
+                                                        "description": "Inclusive start offset in `unit`s.",
+                                                        "minimum": 0,
+                                                        "title": "Start",
+                                                        "type": "integer"
+                                                    },
+                                                    "end": {
+                                                        "description": "Exclusive end offset in `unit`s.",
+                                                        "minimum": 0,
+                                                        "title": "End",
+                                                        "type": "integer"
+                                                    },
+                                                    "unit": {
+                                                        "default": "char",
+                                                        "description": "Addressing unit for start/end.",
+                                                        "enum": [
+                                                            "char",
+                                                            "token",
+                                                            "page_bbox"
+                                                        ],
+                                                        "title": "Unit",
+                                                        "type": "string"
+                                                    },
+                                                    "quote": {
+                                                        "type": "string"
+                                                    }
+                                                },
+                                                "required": [
+                                                    "record_ref",
+                                                    "start",
+                                                    "end"
+                                                ],
+                                                "title": "Span",
+                                                "type": "object"
+                                            },
+                                            "jurisdiction": {
+                                                "description": "Jurisdiction at correction time.",
+                                                "title": "Jurisdiction",
+                                                "type": "string"
+                                            },
+                                            "pack_version": {
+                                                "description": "PolicyProvider pack version at correction time.",
+                                                "title": "Pack Version",
+                                                "type": "string"
+                                            },
+                                            "officer": {
+                                                "description": "Identity of the officer who made the correction.",
+                                                "title": "Officer",
+                                                "type": "string"
+                                            },
+                                            "timestamp": {
+                                                "description": "When the correction was recorded.",
+                                                "format": "date-time",
+                                                "title": "Timestamp",
+                                                "type": "string"
+                                            }
+                                        },
+                                        "required": [
+                                            "direction",
+                                            "record_context",
+                                            "rule_id",
+                                            "rationale",
+                                            "span",
+                                            "jurisdiction",
+                                            "pack_version",
+                                            "officer",
+                                            "timestamp"
+                                        ],
+                                        "title": "Correction",
+                                        "type": "object"
+                                    },
+                                    "title": "Retrieved Corrections",
+                                    "type": "array"
+                                }
+                            },
+                            "required": [
+                                "pack_id",
+                                "pack_version",
+                                "case_id",
+                                "record_ref",
+                                "span",
+                                "rule_id",
+                                "citation",
+                                "rationale",
+                                "test_result",
+                                "confidence"
+                            ],
+                            "title": "RedactionProposal",
+                            "type": "object"
+                        },
+                        "title": "Proposals",
+                        "type": "array"
+                    },
+                    "reviewed": {
+                        "description": "Per-record responsiveness decisions (so Maestro can forward clean / non-responsive records).",
+                        "items": {
+                            "description": "Per-record responsiveness decision echoed on the output (agent-local).\n\nMaestro reads this to mark non-responsive records and to distinguish a\nresponsive record carrying ZERO proposals (a clean, fully-disclosable record \u2014\nthe disclosure default) from a non-responsive one. It is NOT a new pipeline\ncontract: it only surfaces the `is_responsive` decision the agent made about\neach input record (the locked `CandidateRecord.is_responsive` field is what\nMaestro ultimately stamps; this echo carries the decision out of the graph).",
+                            "properties": {
+                                "record_ref": {
+                                    "description": "The reviewed record.",
+                                    "title": "Record Ref",
+                                    "type": "string"
+                                },
+                                "is_responsive": {
+                                    "description": "The agent's responsiveness decision for this record.",
+                                    "title": "Is Responsive",
+                                    "type": "boolean"
+                                },
+                                "proposal_count": {
+                                    "description": "How many redactions were proposed for this record.",
+                                    "minimum": 0,
+                                    "title": "Proposal Count",
+                                    "type": "integer"
+                                }
+                            },
+                            "required": [
+                                "record_ref",
+                                "is_responsive",
+                                "proposal_count"
+                            ],
+                            "title": "RecordReview",
+                            "type": "object"
+                        },
+                        "title": "Reviewed",
+                        "type": "array"
+                    }
+                },
+                "required": [
+                    "proposals",
+                    "reviewed"
+                ]
+            },
+            "graph": {
+                "nodes": [
+                    {
+                        "id": "__start__",
+                        "name": "__start__",
+                        "type": "__start__",
+                        "subgraph": null,
+                        "metadata": {}
+                    },
+                    {
+                        "id": "review",
+                        "name": "review",
+                        "type": "node",
+                        "subgraph": null,
+                        "metadata": {}
+                    },
+                    {
+                        "id": "assemble",
+                        "name": "assemble",
+                        "type": "node",
+                        "subgraph": null,
+                        "metadata": {}
+                    },
+                    {
+                        "id": "__end__",
+                        "name": "__end__",
+                        "type": "__end__",
+                        "subgraph": null,
+                        "metadata": {}
+                    }
+                ],
+                "edges": [
+                    {
+                        "source": "__start__",
+                        "target": "review",
+                        "label": null
+                    },
+                    {
+                        "source": "review",
+                        "target": "assemble",
+                        "label": null
+                    },
+                    {
+                        "source": "assemble",
+                        "target": "__end__",
+                        "label": null
+                    }
+                ]
+            }
+        }
+    ]
+}

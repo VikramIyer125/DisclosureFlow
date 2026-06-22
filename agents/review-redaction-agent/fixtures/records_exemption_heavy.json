@@ -1,0 +1,42 @@
+{
+  "case_id": "case-journey-C",
+  "jurisdiction": "federal_foia",
+  "records": [
+    {
+      "case_id": "case-journey-C",
+      "jurisdiction": "federal_foia",
+      "record_ref": "REC-C-0001",
+      "department": "Office of Human Resources",
+      "record_type": "email",
+      "task_id": "search-office-of-human-resources",
+      "content_hash": "4b80a0dad36af303da435becd69a2972c5d4a08111656293e811715f4ee60320",
+      "is_responsive": null,
+      "text": "From: hr@agency.gov\nTo: director@agency.gov\nSubject: Employee complaint follow-up\n\nThe complaint filed by Jane Doe (SSN 123-45-6789, home address 42 Elm Street, Springfield) regarding her supervisor was reviewed. Her personal phone number is 555-0142. Please keep this confidential. The factual finding is that the agency processed 312 procurement actions in Q1 2024, a number that is releasable.",
+      "uri": "drive://office-of-human-resources/REC-C-0001"
+    },
+    {
+      "case_id": "case-journey-C",
+      "jurisdiction": "federal_foia",
+      "record_ref": "REC-C-0002",
+      "department": "Office of the CIO",
+      "record_type": "memo",
+      "task_id": "search-office-of-the-cio",
+      "content_hash": "1861afa67340d03562caa2773b7b95dd5d4673a696c28ee761e7db331319b06a",
+      "is_responsive": null,
+      "text": "INTERNAL MEMORANDUM - PRE-DECISIONAL\nFrom: Policy Staff\nTo: the Administrator\nSubject: Recommendation on the IT modernization award\n\nWe recommend that the agency NOT proceed with Vendor X and instead favor Vendor Y, because in our judgment Vendor X's security posture is weaker. This is our staff opinion offered to inform your pending decision; no final decision has yet been made. Separately, the program's total appropriated budget for FY2024 was $2.1 million, which is a matter of public record.",
+      "uri": "drive://office-of-the-cio/REC-C-0002"
+    },
+    {
+      "case_id": "case-journey-C",
+      "jurisdiction": "federal_foia",
+      "record_ref": "REC-C-0003",
+      "department": "Office of the Inspector General",
+      "record_type": "report",
+      "task_id": "search-office-of-the-inspector-general",
+      "content_hash": "1dcc72c338dd0f715176dbe1981f89d3af6bc91e0f16f6862a4a1d40c6155ef0",
+      "is_responsive": null,
+      "text": "LAW ENFORCEMENT SENSITIVE - Investigative File 2024-IG-077\nThe Office of the Inspector General interviewed witness Robert Smith concerning the procurement irregularity. Smith, who works at 1200 Industrial Way, provided a statement implicating a named subject. The subject of the investigation is John Q. Public. The investigation concerns whether contract PR-2024-118 was improperly steered.",
+      "uri": "drive://office-of-the-inspector-general/REC-C-0003"
+    }
+  ]
+}

@@ -1,0 +1,18 @@
+{
+  "case_id": "case-journey-A",
+  "jurisdiction": "federal_foia",
+  "records": [
+    {
+      "case_id": "case-journey-A",
+      "jurisdiction": "federal_foia",
+      "record_ref": "REC-A-0001",
+      "department": "Office of Procurement",
+      "record_type": "email",
+      "task_id": "search-office-of-procurement",
+      "content_hash": "9d231fa8a14496931ed8a84dae253c7c2323d125af2710e32d57bb6393efedaa",
+      "is_responsive": null,
+      "text": "From: procurement@agency.gov\nTo: vendor@acme.example\nSubject: Contract PR-2024-118 janitorial services\n\nPlease find attached the signed contract PR-2024-118 for janitorial services covering Jan 1 2024 through Mar 31 2024. The total award value is $48,000. The contract was awarded competitively following solicitation SOL-2024-09. We look forward to a productive engagement.",
+      "uri": "drive://office-of-procurement/REC-A-0001"
+    }
+  ]
+}
