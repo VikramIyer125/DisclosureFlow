@@ -1,0 +1,11 @@
+[project]
+name = "disclosureflow-scoping-agent"
+version = "0.0.1"
+description = "DisclosureFlow Intake/Scoping LangGraph coded agent (brief §3): interprets a Request, detects ambiguity, proposes scope + track, drafts an optional narrowing suggestion when vague. Returns a validated ScopedRequest."
+authors = [{ name = "Vikram Iyer", email = "vikramiyer@berkeley.edu" }]
+dependencies = [
+    "uipath-langchain>=0.12.0, <0.13.0",
+    "pydantic>=2,<3",
+    "langchain-anthropic>=0.3, <0.4",
+]
+requires-python = ">=3.11"

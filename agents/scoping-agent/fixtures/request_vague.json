@@ -1,0 +1,9 @@
+{
+  "request_id": "REQ-B-0001",
+  "requester": "curious.citizen@example.org",
+  "text": "I want all records about the agency's spending and any problems it has had.",
+  "submitted_at": "2026-06-22T09:00:00Z",
+  "attachments": [],
+  "case_id": "case-journey-B",
+  "jurisdiction": "federal_foia"
+}

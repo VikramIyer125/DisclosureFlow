@@ -1,0 +1,6 @@
+{
+  "ProjectType": "Agent",
+  "Name": "disclosureflow-scoping-agent",
+  "Description": "DisclosureFlow Intake/Scoping LangGraph coded agent (brief \u00a73): interprets a Request, detects ambiguity, proposes scope + track, drafts an optional narrowing suggestion when vague. Returns a validated ScopedRequest.",
+  "MainFile": null
+}

@@ -239,13 +239,21 @@ class Correction(ContractModel):
 class ClarificationDraft(ContractModel):
     """Agent-drafted narrowing suggestion for a vague request (§3, §5).
 
+    Embedded on `ScopedRequest.clarification` when `is_vague` is True; carries
+    ONLY the narrowing suggestion's content (the requester-facing `message` and
+    the optional `suggested_narrowing`), so the §3 "never silently narrow" rule
+    holds: the original scope stays in the `ScopedRequest` fields, and the
+    narrowing lives only here as a *suggestion* the requester may decline.
+
+    The round is NOT stored here. `ScopedRequest.clarification_round` is the one
+    canonical round value that feeds the §8.5 idempotency key for the send
+    action (computed at the boundary by `clarification_key`, not on the
+    contract). Keeping the round off the draft avoids two sources of truth.
+
     Sending tolls the clock, so dispatch is gated (one-click human send or
-    autonomous-but-logged). `clarification_round` is a deterministic input to
-    the idempotency key for the send action (§8.5) — the key is *computed* at
-    the boundary, not stored on the contract.
+    autonomous-but-logged); tolling is driven by the case model, not a field.
     """
 
-    clarification_round: int = Field(ge=1, description="1-based round; feeds the idempotency key, not stored as one.")
     message: str = Field(description="Requester-facing narrowing message (drafted on Haiku per §9).")
     suggested_narrowing: Optional[str] = Field(
         default=None, description="The narrower scope offered as optional ('faster, or keep original')."

@@ -1,0 +1,219 @@
+{
+    "$schema": "https://cloud.uipath.com/draft/2024-12/entry-point",
+    "$id": "entry-points.json",
+    "entryPoints": [
+        {
+            "filePath": "agent",
+            "uniqueId": "7bf2e335-638c-40f9-af07-432480644e65",
+            "type": "agent",
+            "input": {
+                "type": "object",
+                "properties": {
+                    "request_id": {
+                        "description": "Portal-assigned id for the submission.",
+                        "title": "Request Id",
+                        "type": "string"
+                    },
+                    "requester": {
+                        "description": "Requester identity (stubbed in MVP).",
+                        "title": "Requester",
+                        "type": "string"
+                    },
+                    "text": {
+                        "description": "Free-text request as submitted.",
+                        "title": "Text",
+                        "type": "string"
+                    },
+                    "submitted_at": {
+                        "description": "Submission timestamp (Clock seam).",
+                        "format": "date-time",
+                        "title": "Submitted At",
+                        "type": "string"
+                    },
+                    "attachments": {
+                        "items": {
+                            "type": "string"
+                        },
+                        "title": "Attachments",
+                        "type": "array"
+                    },
+                    "case_id": {
+                        "default": "intake-unassigned",
+                        "description": "Maestro case id; supplied by the case model on invocation.",
+                        "title": "Case Id",
+                        "type": "string"
+                    },
+                    "jurisdiction": {
+                        "default": "federal_foia",
+                        "description": "Legal regime; only 'federal_foia' in MVP, passed as a real param.",
+                        "title": "Jurisdiction",
+                        "type": "string"
+                    }
+                },
+                "required": [
+                    "request_id",
+                    "requester",
+                    "text",
+                    "submitted_at"
+                ]
+            },
+            "output": {
+                "type": "object",
+                "properties": {
+                    "case_id": {
+                        "description": "Maestro case instance id; ties every contract to one case.",
+                        "title": "Case Id",
+                        "type": "string"
+                    },
+                    "jurisdiction": {
+                        "default": "federal_foia",
+                        "description": "Legal regime. Only 'federal_foia' in MVP; kept a str so new regimes are additive.",
+                        "title": "Jurisdiction",
+                        "type": "string"
+                    },
+                    "request_id": {
+                        "description": "Originating Request.request_id.",
+                        "title": "Request Id",
+                        "type": "string"
+                    },
+                    "track": {
+                        "description": "Triage track classification (Haiku per \u00a79).",
+                        "enum": [
+                            "fast_track",
+                            "standard",
+                            "complex"
+                        ],
+                        "title": "Track",
+                        "type": "string"
+                    },
+                    "subject": {
+                        "description": "Normalized subject of the request.",
+                        "title": "Subject",
+                        "type": "string"
+                    },
+                    "extracted_fields": {
+                        "additionalProperties": {
+                            "type": "string"
+                        },
+                        "description": "Field extraction/normalization output (Haiku per \u00a79).",
+                        "title": "Extracted Fields",
+                        "type": "object"
+                    },
+                    "record_types": {
+                        "description": "Record types in scope, for the search stage.",
+                        "items": {
+                            "type": "string"
+                        },
+                        "title": "Record Types",
+                        "type": "array"
+                    },
+                    "departments_hint": {
+                        "description": "Optional departments the requester named; the search agent decides finally.",
+                        "items": {
+                            "type": "string"
+                        },
+                        "title": "Departments Hint",
+                        "type": "array"
+                    },
+                    "is_vague": {
+                        "default": false,
+                        "description": "True \u21d2 case model routes to the \u00a75 clarification loop.",
+                        "title": "Is Vague",
+                        "type": "boolean"
+                    },
+                    "clarification_round": {
+                        "default": 0,
+                        "description": "0 if never clarified; \u22651 after each clarification. Feeds \u00a78.5 keys.",
+                        "minimum": 0,
+                        "title": "Clarification Round",
+                        "type": "integer"
+                    },
+                    "clarification": {
+                        "additionalProperties": false,
+                        "description": "Agent-drafted narrowing suggestion for a vague request (\u00a73, \u00a75).\n\nEmbedded on `ScopedRequest.clarification` when `is_vague` is True; carries\nONLY the narrowing suggestion's content (the requester-facing `message` and\nthe optional `suggested_narrowing`), so the \u00a73 \"never silently narrow\" rule\nholds: the original scope stays in the `ScopedRequest` fields, and the\nnarrowing lives only here as a *suggestion* the requester may decline.\n\nThe round is NOT stored here. `ScopedRequest.clarification_round` is the one\ncanonical round value that feeds the \u00a78.5 idempotency key for the send\naction (computed at the boundary by `clarification_key`, not on the\ncontract). Keeping the round off the draft avoids two sources of truth.\n\nSending tolls the clock, so dispatch is gated (one-click human send or\nautonomous-but-logged); tolling is driven by the case model, not a field.",
+                        "properties": {
+                            "message": {
+                                "description": "Requester-facing narrowing message (drafted on Haiku per \u00a79).",
+                                "title": "Message",
+                                "type": "string"
+                            },
+                            "suggested_narrowing": {
+                                "anyOf": [
+                                    {
+                                        "type": "string"
+                                    },
+                                    {
+                                        "type": "null"
+                                    }
+                                ],
+                                "default": null,
+                                "description": "The narrower scope offered as optional ('faster, or keep original').",
+                                "title": "Suggested Narrowing"
+                            }
+                        },
+                        "required": [
+                            "message"
+                        ],
+                        "title": "ClarificationDraft",
+                        "type": "object"
+                    }
+                },
+                "required": [
+                    "case_id",
+                    "request_id",
+                    "track",
+                    "subject"
+                ]
+            },
+            "graph": {
+                "nodes": [
+                    {
+                        "id": "__start__",
+                        "name": "__start__",
+                        "type": "__start__",
+                        "subgraph": null,
+                        "metadata": {}
+                    },
+                    {
+                        "id": "scope",
+                        "name": "scope",
+                        "type": "node",
+                        "subgraph": null,
+                        "metadata": {}
+                    },
+                    {
+                        "id": "assemble",
+                        "name": "assemble",
+                        "type": "node",
+                        "subgraph": null,
+                        "metadata": {}
+                    },
+                    {
+                        "id": "__end__",
+                        "name": "__end__",
+                        "type": "__end__",
+                        "subgraph": null,
+                        "metadata": {}
+                    }
+                ],
+                "edges": [
+                    {
+                        "source": "__start__",
+                        "target": "scope",
+                        "label": null
+                    },
+                    {
+                        "source": "scope",
+                        "target": "assemble",
+                        "label": null
+                    },
+                    {
+                        "source": "assemble",
+                        "target": "__end__",
+                        "label": null
+                    }
+                ]
+            }
+        }
+    ]
+}

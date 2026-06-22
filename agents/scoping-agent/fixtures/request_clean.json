@@ -1,0 +1,9 @@
+{
+  "request_id": "REQ-A-0001",
+  "requester": "jane.public@example.org",
+  "text": "I request copies of all email correspondence between the Office of Procurement and Acme Logistics LLC regarding contract #PR-2024-118 (janitorial services), sent or received between January 1, 2024 and March 31, 2024.",
+  "submitted_at": "2026-06-22T09:00:00Z",
+  "attachments": [],
+  "case_id": "case-journey-A",
+  "jurisdiction": "federal_foia"
+}

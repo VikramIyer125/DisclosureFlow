@@ -23,6 +23,7 @@ from pydantic import Field, StrictStr
 
 from .identity import ContractModel, IdentityEnvelope, PackStamp
 from .supporting import (
+    ClarificationDraft,
     ConfidenceSignal,
     ExemptionTestResult,
     QueryStatus,
@@ -56,6 +57,14 @@ class ScopedRequest(IdentityEnvelope):
     branch in the case model; `clarification_round` is the deterministic input
     that feeds the §8.5 idempotency key for the clarification send (not a key
     field itself — keys are computed at the boundary, spec item 6).
+
+    `clarification` carries the agent's narrowing SUGGESTION and is present only
+    when `is_vague` is True (None otherwise). This honors the §3 "never silently
+    narrow" rule: the request's actual interpreted scope stays in `subject`,
+    `record_types`, `extracted_fields`, etc.; the proposed narrower scope lives
+    ONLY inside the draft, as a suggestion the requester can decline. The draft
+    does not carry its own round — `clarification_round` above is the single
+    canonical round (one source of truth for the §8.5 key).
     """
 
     request_id: str = Field(description="Originating Request.request_id.")
@@ -73,6 +82,13 @@ class ScopedRequest(IdentityEnvelope):
     is_vague: bool = Field(default=False, description="True ⇒ case model routes to the §5 clarification loop.")
     clarification_round: int = Field(
         default=0, ge=0, description="0 if never clarified; ≥1 after each clarification. Feeds §8.5 keys."
+    )
+    clarification: Optional[ClarificationDraft] = Field(
+        default=None,
+        description=(
+            "Agent's narrowing suggestion; present only when is_vague is True, None otherwise. "
+            "Holds the proposed narrower scope so the original scope is never silently narrowed (§3)."
+        ),
     )
 
 
