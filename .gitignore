@@ -1,0 +1,40 @@
+# ── Secrets / auth — NEVER commit ─────────────────────────────
+# `uipath auth` writes the access token into .env. Keep it out of git.
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# ── Build artifacts ───────────────────────────────────────────
+*.nupkg
+dist/
+build/
+*.egg-info/
+.eggs/
+
+# ── Python caches ─────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# ── Virtual environments ──────────────────────────────────────
+.venv/
+venv/
+# NOTE: do NOT ignore uv.lock — it is committed for reproducible builds.
+
+# ── OS / editor ───────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/*
+!.vscode/launch.json
+.claude/            
+CLAUDE.md
+docs/
+
+# ── Keep committed (listed here as a reminder — do not ignore): ─
+# uipath.json, bindings.json, entry-points.json, project.uiproj, .uipath/
+# uv.lock, pyproject.toml
