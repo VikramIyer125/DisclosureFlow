@@ -1,0 +1,16 @@
+[project]
+name = "disclosureflow-shared"
+version = "0.0.1"
+description = "DisclosureFlow shared backbone: stage-to-stage data contracts (§10) and the four swappable seam Protocols (§7) with demo/prod backings. Imported by all three coded agents and the requester portal."
+authors = [{ name = "Vikram Iyer", email = "vikramiyer@berkeley.edu" }]
+dependencies = [
+    "pydantic>=2,<3",
+]
+requires-python = ">=3.11"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["contracts", "seams", "release"]

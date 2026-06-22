@@ -1,0 +1,32 @@
+{
+  "pack_id": "federal-foia",
+  "version": "2025.06.0",
+  "effective_date": "2025-06-01T00:00:00Z",
+  "jurisdiction": "federal_foia",
+  "rules": [
+    {
+      "id": "b5",
+      "citation": "5 U.S.C. § 552(b)(5)",
+      "text": "Inter-agency or intra-agency memorandums or letters that would not be available by law to a party in litigation with the agency, including the deliberative-process privilege protecting pre-decisional, deliberative material.",
+      "test": "foreseeable_harm",
+      "foreseeable_harm": true,
+      "required_test_elements": ["predecisional", "deliberative", "foreseeable_harm"]
+    },
+    {
+      "id": "b6",
+      "citation": "5 U.S.C. § 552(b)(6)",
+      "text": "Personnel and medical files and similar files the disclosure of which would constitute a clearly unwarranted invasion of personal privacy, weighed against the public interest in disclosure.",
+      "test": "balancing",
+      "foreseeable_harm": true,
+      "required_test_elements": ["personal_privacy_interest", "public_interest", "balancing_outcome", "foreseeable_harm"]
+    },
+    {
+      "id": "b7c",
+      "citation": "5 U.S.C. § 552(b)(7)(C)",
+      "text": "Records or information compiled for law-enforcement purposes, to the extent that production could reasonably be expected to constitute an unwarranted invasion of personal privacy, weighed against the public interest in disclosure.",
+      "test": "balancing",
+      "foreseeable_harm": true,
+      "required_test_elements": ["law_enforcement_purpose", "personal_privacy_interest", "public_interest", "balancing_outcome", "foreseeable_harm"]
+    }
+  ]
+}
