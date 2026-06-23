@@ -13,6 +13,12 @@ build/
 *.egg-info/
 .eggs/
 
+# ── UiPath local runtime artifacts ────────────────────────────
+# `uipath run`/`invoke` write a local LangGraph checkpoint DB here.
+__uipath/
+*.db
+.uipath/
+
 # ── Python caches ─────────────────────────────────────────────
 __pycache__/
 *.py[cod]
@@ -30,10 +36,9 @@ venv/
 Thumbs.db
 .idea/
 .vscode/*
-!.vscode/launch.json
-.claude/            
-CLAUDE.md
-docs/
+!.vscode/launch.json           
+hello/
+ASSUMPTIONS.md
 
 # ── Keep committed (listed here as a reminder — do not ignore): ─
 # uipath.json, bindings.json, entry-points.json, project.uiproj, .uipath/
