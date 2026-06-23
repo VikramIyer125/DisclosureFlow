@@ -1,0 +1,42 @@
+{
+  "_comment": "Per-journey RecordStore wiring for the three §11 demo journeys. The step layer (steps/record_query_step.py) reads this to build a LocalFolderRecordStore with the right root + per-department behavior. Department names match what the Custodian/Search agent emits (and the agent fixtures); behaviors are the four §7 controllable responses. All record TEXT lives in the per-department folders under each journey root. Obviously synthetic, no real PII.",
+  "journeys": {
+    "A": {
+      "case_id": "case-journey-A",
+      "description": "Fast-track: clean single-department request, one responsive record, no exemption material -> Review yields 0 proposals.",
+      "root": "journey-A",
+      "behavior": {
+        "Office of Procurement": "responded",
+        "Office of the CIO": "responded",
+        "Office of Communications": "responded"
+      },
+      "queried_departments": ["Office of Procurement"]
+    },
+    "B": {
+      "case_id": "case-journey-B",
+      "description": "Orchestration: broad request fans out to three departments; one slow (reminder), one silent (escalation), one responded.",
+      "root": "journey-B",
+      "behavior": {
+        "Office of Procurement": "responded",
+        "Office of the CIO": "slow",
+        "Office of Communications": "silent"
+      },
+      "queried_departments": ["Office of Procurement", "Office of the CIO", "Office of Communications"]
+    },
+    "C": {
+      "case_id": "case-journey-C",
+      "description": "Governance: every department responds with exemption-triggering content -> Review proposes b5 (deliberative), b6 (PII), b7c (law-enforcement personal info).",
+      "root": "journey-C",
+      "behavior": {
+        "Office of Human Resources": "responded",
+        "Office of the CIO": "responded",
+        "Office of the Inspector General": "responded"
+      },
+      "queried_departments": [
+        "Office of Human Resources",
+        "Office of the CIO",
+        "Office of the Inspector General"
+      ]
+    }
+  }
+}

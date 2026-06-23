@@ -1,0 +1,5 @@
+From: procurement@agency.gov
+To: vendor@acme.example
+Subject: Contract PR-2024-118 janitorial services
+
+Please find attached the signed contract PR-2024-118 for janitorial services covering Jan 1 2024 through Mar 31 2024. The total award value is $48,000. The contract was awarded competitively following solicitation SOL-2024-09. We look forward to a productive engagement.

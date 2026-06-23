@@ -1,0 +1,5 @@
+From: procurement@agency.gov
+To: vendor@modernco.example
+Subject: IT modernization program - contract award 2023
+
+This confirms the award of contract IT-MOD-2023-004 under the agency's IT modernization program. The competitively awarded value is $1,250,000 for cloud-migration services performed during calendar year 2023. Solicitation SOL-2023-IT-11 governed the procurement. No personal or pre-decisional information is contained in this record; it is releasable in full.
