@@ -4,7 +4,9 @@ flowchart TB
   __start__(__start__)
   review(review)
   assemble(assemble)
+  approval_gate(approval_gate)
   __end__(__end__)
   __start__ --> review
+  assemble --> approval_gate
   review --> assemble
-  assemble --> __end__
+  approval_gate --> __end__

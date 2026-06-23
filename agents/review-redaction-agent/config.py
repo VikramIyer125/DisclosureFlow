@@ -53,6 +53,33 @@ def model_for(step: str) -> str:
     return _STEP_DEFAULTS.get(step, DEFAULT_MODEL)
 
 
+# Bound on the §5/§2 reject→revise loop. The officer can ask the agent to revise
+# a rejected proposal; the agent re-runs the targeted reasoning and re-interrupts.
+# This caps how many revise rounds a single proposal may go through before its
+# unresolved state falls back to the DISCLOSURE DEFAULT (released, not withheld) —
+# preventing an infinite human/agent ping-pong. Config value (env override), not a
+# magic literal in logic. Default 1 (one revise + one re-review) per brief's
+# "small max number of rounds (e.g. 1–2)". Logged in ASSUMPTIONS.md.
+DEFAULT_MAX_REVISE_ROUNDS = 1
+
+
+def max_revise_rounds() -> int:
+    """Resolve the bound on the reject→revise loop (§5.C, §2).
+
+    Order: ``MAX_REVISE_ROUNDS`` env var → ``DEFAULT_MAX_REVISE_ROUNDS``. A value
+    of 0 disables revision (a "revise" rejection then immediately falls back to
+    the disclosure default). Negative/garbage values clamp to the default.
+    """
+    raw = os.environ.get("MAX_REVISE_ROUNDS")
+    if raw is None or raw == "":
+        return DEFAULT_MAX_REVISE_ROUNDS
+    try:
+        value = int(raw)
+    except ValueError:
+        return DEFAULT_MAX_REVISE_ROUNDS
+    return value if value >= 0 else DEFAULT_MAX_REVISE_ROUNDS
+
+
 def temperature_for(step: str) -> Optional[float]:
     """Resolve the sampling temperature for a step, or ``None`` to omit it.
 

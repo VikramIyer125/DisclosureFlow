@@ -1,12 +1,36 @@
-"""Review & Redaction coded agent — DisclosureFlow stage 4 (brief §3, §8.1, §8.3, §9, §10).
+"""Review & Redaction coded agent — DisclosureFlow stages 4 + 5 (brief §3, §5, §8.1, §8.3, §8.4, §9, §10).
 
 THE HERO. ONE single-purpose LangGraph graph that performs exactly one stage's
-reasoning: given the `CandidateRecord`s surfaced by the search stage, it (1)
-decides each record's RESPONSIVENESS and (2) for each responsive record proposes
-zero or more redactions, each grounded in a specific PolicyProvider rule with a
+reasoning PLUS the §5 redaction-approval human gate that legally must sit on top
+of it. Given the `CandidateRecord`s surfaced by the search stage, it (1) decides
+each record's RESPONSIVENESS and (2) for each responsive record proposes zero or
+more redactions, each grounded in a specific PolicyProvider rule with a
 source-grounded foreseeable-harm rationale and a filled, data-driven exemption
-test. It returns a typed list of `RedactionProposal`s, each carrying a DERIVED
-confidence signal (§8.1) and §8.3-validated at the boundary.
+test. Each proposal carries a DERIVED confidence signal (§8.1) and is §8.3-validated
+at the boundary. THEN (3) the agent surfaces every proposal to a human records
+officer through a LangGraph INTERRUPT that creates an Action Center task (§5); on
+resume it applies the officer's accept/reject/edit per proposal, runs the bounded
+reject→revise loop (§2/§5.C) re-entering its own reasoning, and emits
+`ApprovedRedaction[]` (§10) — the §8.4 inputs the downstream release guard consumes.
+
+§5 — THE LEGALLY LOAD-BEARING GATE (do not dilute):
+  * The agent PROPOSES; a human officer ACCEPTS / REJECTS / EDITS each proposed
+    redaction; only AFTER that does the agent emit `ApprovedRedaction[]`. The
+    agent NEVER approves on its own authority — every emitted approval carries an
+    `approval_token` derived from the SPECIFIC completed Action Center task, not a
+    value the agent invents.
+  * Disclosure default is preserved THROUGH the gate: a REJECTED over-redaction
+    means that content is RELEASED, not withheld — the rejected proposal is NOT
+    emitted as an `ApprovedRedaction` (so the release step leaves those bytes
+    intact). "reject = this redaction is wrong, release it" is distinguished from
+    "reject = revise and re-propose" by an explicit officer signal.
+  * The redaction-approval gate is a LangGraph interrupt INSIDE this agent (§5),
+    NOT a Maestro User Task, precisely because the officer's feedback must
+    re-enter THIS graph's reasoning to drive the revise loop. This is the §5
+    HITL split; it is NOT a supervisor and adds NO cross-stage routing.
+
+This file also re-emits the original §8.3-validated proposals (for audit) and the
+per-record responsiveness decisions.
 
 DEFAULT POSTURE IS DISCLOSURE (brief §3). FOIA runs on a presumption of openness:
 the agent never withholds by default and never withholds on its own authority. It
@@ -35,12 +59,20 @@ HARD RULES honoured here (CLAUDE.md / build-prompt §1a):
     emitted `RedactionProposal` via the `IdentityEnvelope`; `pack_id`/
     `pack_version` come from the seam's `pack_metadata` (the `PackStamp`).
 
-Graph shape (linear, single stage):
-    START → review (LLM, Opus per §9) → assemble (derive confidence + §8.3 validate) → END
+Graph shape (linear + one HITL interrupt loop):
+    START → review (LLM, Opus per §9)
+          → assemble (derive confidence + §8.3 validate)
+          → approval_gate (interrupt per proposal; bounded reject→revise loop; emit ApprovedRedaction[])
+          → END
+The `approval_gate` node is the ONLY new control construct (a LangGraph interrupt
+that pauses on each Action Center task and resumes on the officer's decision; on a
+"revise" rejection it re-runs the targeted review reasoning and re-interrupts, up
+to `MAX_REVISE_ROUNDS`). No supervisor, no cross-stage routing.
 
 I/O contract:
-    input  = GraphInput   (a list of locked `CandidateRecord`s + case_id/jurisdiction)
-    output = ReviewResult  (a thin AGENT-LOCAL envelope: `{ proposals: list[RedactionProposal] }`)
+    input  = GraphInput   (a list of locked `CandidateRecord`s + case_id/jurisdiction; optional `officer`)
+    output = ReviewResult  (a thin AGENT-LOCAL envelope: `{ approved: list[ApprovedRedaction],
+             proposals: list[RedactionProposal], reviewed: list[RecordReview] }`)
 
 Output-shape note: the §10 stage-4 contract is `RedactionProposal[]` (a list),
 but a uipath/LangGraph OUTPUT schema must have an object root. `ReviewResult` is a
@@ -68,17 +100,21 @@ fabricated-but-valid proposal.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 from langchain_core.messages import HumanMessage, SystemMessage
 from langgraph.graph import END, START, StateGraph
+from langgraph.types import interrupt
 from pydantic import BaseModel, Field, ValidationError
 
 from shared.contracts import (
     FEDERAL_FOIA,
+    ApprovedRedaction,
     CandidateRecord,
     ConfidenceSignal,
     ExemptionTestResult,
@@ -89,9 +125,10 @@ from shared.contracts import (
     derive_confidence,
     validate_proposal,
 )
+from shared.release.mask import effective_span, redacted_content_hash
 from shared.seams import FederalFoiaPackProvider, PolicyProvider
 
-from config import model_for, temperature_for
+from config import max_revise_rounds, model_for, temperature_for
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -202,6 +239,77 @@ class GraphInput(BaseModel):
     records: list[CandidateRecord] = Field(
         description="The candidate records to review (from the record-store fan-out)."
     )
+    officer: str = Field(
+        default="records.officer",
+        description=(
+            "Identity recorded on each ApprovedRedaction.officer and used as the default "
+            "Action Center assignee for the §5 approval task. Stamped on the decision so the "
+            "audit trail names who approved; the authoritative approval_token still comes from "
+            "the completed task identity, not this field."
+        ),
+    )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# §5 redaction-approval gate — resume payload + officer-decision schemas
+# ─────────────────────────────────────────────────────────────────────────────
+#
+# When `interrupt(CreateEscalation(...))` resumes, the agent receives the officer's
+# decision for the surfaced proposal(s). On the platform that decision is the
+# completed Action Center task; locally (`uipath run --resume`) it is the JSON the
+# tester supplies. Both are normalized into `OfficerDecision` below. These are
+# AGENT-LOCAL schemas — they shape the human's input into the graph, they are NOT
+# pipeline contracts (the contract is the emitted `ApprovedRedaction`).
+
+
+class OfficerDecision(BaseModel):
+    """One officer decision on one surfaced proposal (the resume input, §5).
+
+    `proposal_id` ties the decision back to the exact surfaced proposal (the agent
+    assigns a deterministic id per case+record+span+round so a replay matches).
+    `decision` is the three-way §5 verdict. For 'edited' the officer supplies the
+    adjusted `edited_quote` (the agent re-locates it to derive the span — the
+    officer never computes offsets, same grounding rule as the model). `revise`
+    distinguishes the two meanings of a rejection (§5.C): when True the agent
+    REVISES and re-proposes (reject = "wrong, try again"); when False the rejection
+    stands and the content is RELEASED (reject = "this withholding is wrong, do not
+    withhold" — the disclosure default). `note` is the optional officer rationale,
+    recorded on the decision and (advisory) for the corrections log.
+    """
+
+    proposal_id: str = Field(description="Id of the surfaced proposal this decision concerns.")
+    decision: str = Field(
+        description="One of: 'accept' | 'reject' | 'edit'. (Maps to ApprovedRedaction.decision.)"
+    )
+    edited_quote: Optional[str] = Field(
+        default=None,
+        description="Required when decision=='edit': the officer's adjusted verbatim quote to redact.",
+    )
+    revise: bool = Field(
+        default=False,
+        description=(
+            "Only meaningful when decision=='reject'. True ⇒ revise & re-propose (the §5.C "
+            "loop). False ⇒ rejection stands, content is RELEASED (disclosure default)."
+        ),
+    )
+    note: Optional[str] = Field(
+        default=None, description="Optional officer note / correction rationale (advisory)."
+    )
+
+
+class ApprovalResume(BaseModel):
+    """The full resume payload for the §5 gate: one decision per surfaced proposal.
+
+    Modeled as a typed schema so `uipath run --resume` (local) and the Action
+    Center completion (platform) feed the graph the same shape. `decisions` need
+    not cover every proposal — any proposal with no matching decision is treated
+    as the SAFE DEFAULT (rejected/released, not silently approved): the burden is
+    on withholding, so an un-acted proposal never becomes an approval.
+    """
+
+    decisions: list[OfficerDecision] = Field(
+        default_factory=list, description="One decision per surfaced proposal (by proposal_id)."
+    )
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -300,19 +408,35 @@ class RecordReview(BaseModel):
 
 
 class ReviewResult(BaseModel):
-    """Thin agent-local OUTPUT envelope wrapping the §10 `RedactionProposal[]` list.
+    """Thin agent-local OUTPUT envelope composing the §10 stage-4 + stage-5 lists.
 
-    The §10 stage-4 contract is `RedactionProposal[]`, but a uipath/LangGraph
-    OUTPUT schema needs an object root — so the graph emits
-    `ReviewResult{proposals:[...], reviewed:[...]}`. `proposals` COMPOSES the
-    locked, shared `RedactionProposal` (it does not redefine it). `reviewed`
-    echoes the per-record responsiveness decisions so Maestro can route clean /
-    non-responsive records. Deliberately agent-local, not a new shared pipeline
-    contract (see ASSUMPTIONS.md), mirroring the Custodian agent's `SearchPlan`.
+    A uipath/LangGraph OUTPUT schema needs an object root, so the graph emits
+    `ReviewResult{approved:[...], proposals:[...], reviewed:[...]}`. Each field
+    COMPOSES a locked, shared contract (it does not redefine one):
+      * `approved` — the §10 stage-5 `ApprovedRedaction[]`: the officer's
+        decisions after the §5 gate. ONLY 'approved'/'edited' decisions ever
+        reach the release step (a 'rejected' content release carries no approval
+        token, so the release guard would block it). This is the agent's
+        authoritative output now: the gate has run, a human has decided.
+      * `proposals` — the §10 stage-4 `RedactionProposal[]` the agent originally
+        proposed, kept for the audit trail (what was proposed vs. what was
+        approved). Includes proposals that were rejected/released.
+      * `reviewed` — the per-record responsiveness decisions so Maestro can
+        forward clean / non-responsive records.
+    Deliberately agent-local, not a new shared pipeline contract (see
+    ASSUMPTIONS.md), mirroring the Custodian agent's `SearchPlan`.
     """
 
+    approved: list[ApprovedRedaction] = Field(
+        default_factory=list,
+        description=(
+            "Officer decisions after the §5 human gate. Only 'approved'/'edited' entries carry "
+            "release-bound bytes (approval_token + approved_content_hash, §8.4); 'rejected' "
+            "entries are recorded for audit/corrections but release their content (disclosure default)."
+        ),
+    )
     proposals: list[RedactionProposal] = Field(
-        description="Every proposed withholding across all records (each §8.3-validated, confidence DERIVED)."
+        description="Every proposed withholding across all records (each §8.3-validated, confidence DERIVED). Audit trail."
     )
     reviewed: list[RecordReview] = Field(
         description="Per-record responsiveness decisions (so Maestro can forward clean / non-responsive records)."
@@ -330,9 +454,16 @@ class State(BaseModel):
     case_id: str
     jurisdiction: str = FEDERAL_FOIA
     records: list[CandidateRecord] = Field(default_factory=list)
+    officer: str = "records.officer"
 
     # Produced by the review node.
     draft: Optional[_ReviewDraft] = None
+
+    # Produced by the assemble node and consumed by the approval_gate node.
+    # The §8.3-validated proposals (confidence DERIVED) awaiting the human gate,
+    # plus the per-record responsiveness echo carried through to the output.
+    proposals: list[RedactionProposal] = Field(default_factory=list)
+    reviewed: list[RecordReview] = Field(default_factory=list)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -795,7 +926,7 @@ def _draft_to_proposal(
     )
 
 
-async def assemble_node(state: State) -> ReviewResult:
+async def assemble_node(state: State) -> State:
     """Assemble + boundary-validate the typed proposals; DERIVE confidence (§8.1, §8.3).
 
     For each proposed redaction: rebuild the locked `RedactionProposal`, stamp the
@@ -807,6 +938,10 @@ async def assemble_node(state: State) -> ReviewResult:
     Maestro dead-letters to a human (§8.2) — no faked-but-valid placeholder is
     emitted. `reviewed` echoes each record's responsiveness so Maestro can forward
     clean / non-responsive records.
+
+    Writes the validated proposals + responsiveness echo into `State` for the
+    `approval_gate` node (the §5 human gate) rather than returning the final
+    `ReviewResult` — the gate is now the terminal node.
     """
     if state.draft is None:  # defensive: review_node either set draft or already raised
         raise ReviewUnrecoverableError(
@@ -890,25 +1025,708 @@ async def assemble_node(state: State) -> ReviewResult:
             )
         )
 
-    return ReviewResult(proposals=proposals, reviewed=reviewed)
+    return state.model_copy(update={"proposals": proposals, "reviewed": reviewed})
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# §5 — redaction-approval HUMAN GATE (LangGraph interrupt + bounded revise loop)
+# ─────────────────────────────────────────────────────────────────────────────
+#
+# The legally load-bearing gate. The agent PROPOSES; a human officer decides; only
+# then does the agent emit `ApprovedRedaction[]`. Implemented as a LangGraph
+# interrupt (NOT a Maestro User Task) so the officer's feedback re-enters THIS
+# graph and drives the §5.C revise loop. The interrupt creates an Action Center
+# task carrying the proposals; the agent pauses; on the officer's completion the
+# agent resumes with their decisions.
+
+# The UiPath HITL suspend primitive in the INSTALLED SDK (uipath 2.11.x split
+# packages). Imported lazily inside the node so a bare local run / `uipath init`
+# schema introspection never requires the platform SDK to be importable, and so a
+# unit test can drive the node's pure logic without the SDK. See ASSUMPTIONS.md
+# for the API-version note (the older `uipath.models.CreateAction` documented in
+# Context7 is NOT present in this installed version; the real primitive is
+# `interrupt(CreateEscalation(...))` from `uipath.platform.common`).
+APPROVAL_APP_NAME = os.environ.get(
+    "REDACTION_REVIEW_APP_NAME", "DisclosureFlow_RedactionReview"
+)
+APPROVAL_APP_FOLDER = os.environ.get("REDACTION_REVIEW_APP_FOLDER", "Shared")
+
+
+def _proposal_id(proposal: RedactionProposal, round_no: int) -> str:
+    """Deterministic id for a surfaced proposal (matching + idempotency, §8.5).
+
+    Stable across a pause/resume/replay for the SAME case+record+span+round, so
+    the officer's decision matches the right proposal and a replay computes the
+    identical id (no duplicate task, no double-emit). Shape:
+    ``<case_id>:approval:<record_ref>:<start>-<end>:r<round>``. Not a contract
+    field — purely the gate's correlation key.
+    """
+    span = proposal.span
+    return (
+        f"{proposal.case_id}:approval:{proposal.record_ref}:"
+        f"{span.start}-{span.end}:r{round_no}"
+    )
+
+
+def _approval_token(raw_resume: Any, decision: OfficerDecision, proposal_id: str) -> str:
+    """Derive the §8.4 approval_token from the SPECIFIC human approval (§5, §8.4).
+
+    The token must tie to the real human action, never be invented by the agent.
+    Resolution order:
+      1. The completed Action Center task's durable identity from the resume
+         value — its `key` (GUID) or `id`. On the platform `interrupt(CreateEscalation)`
+         resumes with the completed task; we read `key`/`id` whether it arrives as
+         a task-like object or a dict. This is the authoritative, platform-issued
+         token tied to THIS approval.
+      2. Local/test fallback: when the resume value carries no task identity (e.g.
+         `uipath run --resume` with a plain decisions JSON), the token is derived
+         deterministically from the task identity that WOULD key this approval —
+         `sha256(proposal_id)` — so it is still a real, reproducible binding to
+         the specific approved proposal rather than a random value, and a replay
+         yields the same token (idempotent). Documented in ASSUMPTIONS.md.
+
+    Returns a non-empty str (StrictStr-safe for the §8.4 guard).
+    """
+    task_key = _resume_task_identity(raw_resume)
+    if task_key:
+        # Bind the platform task identity to THIS proposal so two proposals in one
+        # task get distinct tokens the guard can match per (record_ref, token).
+        return f"actiontask:{task_key}:{proposal_id}"
+    # Deterministic local binding to the specific approval (not random).
+    digest = hashlib.sha256(proposal_id.encode("utf-8")).hexdigest()
+    return f"local-approval:{digest}"
+
+
+def _resume_task_identity(raw_resume: Any) -> Optional[str]:
+    """Pull the completed Action Center task's key/id from the resume value, if any.
+
+    Handles the platform shapes (`Task` object with `.key`/`.id`, or a dict) and
+    returns None for the local plain-JSON resume (which has no task identity).
+    """
+    if raw_resume is None:
+        return None
+    # Task-like object (uipath.platform.action_center.tasks.Task).
+    for attr in ("key", "id"):
+        val = getattr(raw_resume, attr, None)
+        if val:
+            return str(val)
+    # Dict shapes from the platform / a test.
+    if isinstance(raw_resume, dict):
+        for k in ("key", "Key", "id", "Id", "taskKey", "task_key"):
+            if raw_resume.get(k):
+                return str(raw_resume[k])
+        # Sometimes the task is nested under 'action'/'task'.
+        for nested in ("action", "task", "Task"):
+            inner = raw_resume.get(nested)
+            if isinstance(inner, dict):
+                for k in ("key", "Key", "id", "Id"):
+                    if inner.get(k):
+                        return str(inner[k])
+    return None
+
+
+def _normalize_resume(raw_resume: Any) -> ApprovalResume:
+    """Coerce the interrupt resume value into the typed `ApprovalResume` (§5).
+
+    The resume value can arrive as:
+      * an `ApprovalResume` already (in-process tests),
+      * a dict `{"decisions": [...]}` (the `uipath run --resume` JSON and the
+        Action Center task `data`),
+      * a task-like object whose `.data` carries `{"decisions": [...]}` (platform
+        completion).
+    Anything else (or no decisions) yields an empty `ApprovalResume` — and an
+    empty resume means EVERY proposal falls back to the safe default (released,
+    not withheld): the burden is on withholding, so silence never approves.
+    """
+    if isinstance(raw_resume, ApprovalResume):
+        return raw_resume
+    payload: Any = raw_resume
+    # Unwrap a task-like object's `.data`.
+    data_attr = getattr(raw_resume, "data", None)
+    if data_attr is not None and not isinstance(raw_resume, dict):
+        payload = data_attr
+    if isinstance(payload, dict):
+        # The officer app may post {"decisions":[...]} or a bare decisions list,
+        # or nest it under 'data'.
+        if "decisions" in payload:
+            candidate = {"decisions": payload.get("decisions") or []}
+        elif isinstance(payload.get("data"), dict) and "decisions" in payload["data"]:
+            candidate = {"decisions": payload["data"].get("decisions") or []}
+        else:
+            candidate = {"decisions": []}
+        try:
+            return ApprovalResume.model_validate(candidate)
+        except ValidationError:
+            return ApprovalResume(decisions=[])
+    if isinstance(payload, list):
+        try:
+            return ApprovalResume(decisions=payload)
+        except ValidationError:
+            return ApprovalResume(decisions=[])
+    return ApprovalResume(decisions=[])
+
+
+def _proposal_task_payload(proposal: RedactionProposal, proposal_id: str) -> dict:
+    """The minimal, typed slice of one proposal surfaced to the officer (§5).
+
+    Carries exactly what the officer needs to decide and what §5 says must be
+    individually reviewable for balancing exemptions: the record + span/quote, the
+    grounding rule_id + citation, the foreseeable-harm rationale, the filled
+    test_result, and the DERIVED confidence + its derivation (so the app/officer
+    can present b6/b7c — always `low`/`balancing_always_full_review` — for full
+    individual review, and group high-confidence non-balancing ones if desired).
+    """
+    return {
+        "proposal_id": proposal_id,
+        "record_ref": proposal.record_ref,
+        "rule_id": proposal.rule_id,
+        "citation": proposal.citation,
+        "span": {
+            "start": proposal.span.start,
+            "end": proposal.span.end,
+            "unit": proposal.span.unit,
+            "quote": proposal.span.quote,
+        },
+        "rationale": proposal.rationale,
+        "test_result": proposal.test_result.model_dump(mode="json"),
+        "confidence": {
+            "level": proposal.confidence.level,
+            "derivation": proposal.confidence.derivation,
+        },
+        # The two ways an officer may reject (§5.C): release (disclosure default)
+        # vs. revise. Surfaced so the app can offer both and set `revise`.
+        "decision_options": ["accept", "reject", "edit"],
+        "full_individual_review_required": proposal.confidence.level == "low",
+    }
+
+
+def _surface_for_review(
+    proposals: list[RedactionProposal], round_no: int, officer: str
+) -> tuple[ApprovalResume, Any]:
+    """Create the Action Center task for a batch of proposals and PAUSE (§5).
+
+    Calls `interrupt(CreateEscalation(...))` with the typed proposal payloads; the
+    agent suspends here until the officer completes the task, then resumes with
+    their decisions. Returns BOTH the normalized `ApprovalResume` (the decisions)
+    AND the RAW resume value — the raw value carries the completed Action Center
+    task identity (`key`/`id`) that `_approval_token` binds the §8.4 token to, so
+    it must NOT be discarded (it survives normalization only on the raw object).
+    `interrupt()` is memoized by LangGraph checkpointing, so a resume/replay does
+    NOT recreate the task — the §8.5 idempotency for this side effect (deterministic
+    `data` keyed by case_id+round). The SDK import is lazy so non-platform contexts
+    don't need it.
+    """
+    payload_proposals = [
+        _proposal_task_payload(p, _proposal_id(p, round_no)) for p in proposals
+    ]
+    case_id = proposals[0].case_id
+    task_data = {
+        # Deterministic idempotency discriminator for this surface (§8.5): one task
+        # per case+round. A replay computes the same data and `interrupt()` dedupes.
+        "idempotency_key": f"{case_id}:redaction_review:round{round_no}",
+        "case_id": case_id,
+        "round": round_no,
+        "instructions": (
+            "DisclosureFlow redaction review. FOIA default is DISCLOSURE: approve a "
+            "withholding only if the rule and the foreseeable harm both genuinely apply. "
+            "For each proposal choose accept | reject | edit. Rejecting RELEASES the "
+            "content (set revise=true only to ask the agent to re-propose). Exemptions 6 "
+            "and 7(C) (confidence 'low' / balancing) require full individual review."
+        ),
+        "proposals": payload_proposals,
+    }
+
+    # Lazy import: the real platform primitive (this installed SDK version).
+    from uipath.platform.common import CreateEscalation  # type: ignore
+
+    raw_resume = interrupt(
+        CreateEscalation(
+            app_name=APPROVAL_APP_NAME,
+            app_folder_path=APPROVAL_APP_FOLDER,
+            title=f"Review {len(proposals)} redaction(s) — case {case_id} (round {round_no})",
+            data=task_data,
+            assignee=officer or None,
+        )
+    )
+    return _normalize_resume(raw_resume), raw_resume
+
+
+def _approved_content_hash(
+    record: CandidateRecord, approved_decisions: list[tuple[str, int, int]]
+) -> str:
+    """Record-level §8.4 hash over ALL approved/edited spans on this record.
+
+    `approved_decisions` is the list of (decision, eff_start, eff_end) the officer
+    APPROVED/EDITED for this record. Uses the SHARED `redacted_content_hash`
+    (`shared/release/mask.py`) — the SAME mask convention (`█`, length-preserving,
+    right-to-left) the release step applies — so the hash the agent stamps on each
+    `ApprovedRedaction` is byte-identical to what the §8.4 release guard recomputes.
+    The hash is record-level by design: every approved redaction on a record
+    carries the same hash (all that record's approved spans applied together),
+    matching `steps/release_step.py`'s per-record expectation.
+    """
+    spans = [(start, end) for (_decision, start, end) in approved_decisions]
+    return redacted_content_hash(record.text or "", spans)
+
+
+async def _revise_proposals(
+    to_revise: list[tuple[RedactionProposal, OfficerDecision]],
+    state: State,
+    provider: PolicyProvider,
+) -> list[RedactionProposal]:
+    """Re-run the targeted review reasoning for rejected-with-revise proposals (§5.C).
+
+    The officer rejected these as WRONG and asked the agent to try again. The agent
+    re-invokes its OWN review reasoning (Opus per §9) for just those records,
+    feeding the officer's note as corrective context, then re-assembles + re-derives
+    confidence + re-validates (§8.3) exactly as the main path — so a revised
+    proposal is held to the identical grounding bar. Returns the new validated
+    proposals (zero or more; the model may now decline to withhold, which is the
+    disclosure default and a legitimate outcome). Any §8.3 failure after the
+    revise raises `ReviewUnrecoverableError` (§8.2) — a revised proposal is never
+    faked.
+
+    This is targeted reasoning, NOT cross-stage routing: it re-enters this agent's
+    own stage-4 reasoning under officer feedback. It does not call other agents.
+    """
+    if not to_revise:
+        return []
+
+    api_key = _resolve_anthropic_key()
+    if not api_key:
+        raise ReviewUnrecoverableError(
+            state.case_id,
+            "ANTHROPIC_API_KEY unavailable; cannot revise a rejected proposal (§8.2 permanent).",
+        )
+
+    records_by_ref = {rec.record_ref: rec for rec in state.records}
+    # The records whose proposals need revising, de-duplicated, in input order.
+    revise_refs = []
+    seen = set()
+    feedback_by_ref: dict[str, list[str]] = {}
+    for proposal, decision in to_revise:
+        ref = proposal.record_ref
+        if ref not in seen:
+            seen.add(ref)
+            revise_refs.append(ref)
+        note = decision.note or "(no note given)"
+        feedback_by_ref.setdefault(ref, []).append(
+            f"- Your earlier proposal to redact {proposal.span.quote!r} under {proposal.rule_id} "
+            f"was REJECTED as wrong. Officer note: {note}"
+        )
+
+    revise_records = [records_by_ref[r] for r in revise_refs if r in records_by_ref]
+    if not revise_records:
+        return []
+
+    allowed_by_ref = _allowed_rules_by_record(revise_records, state.jurisdiction, provider)
+    llm = _build_llm("review", api_key)
+    structured = llm.with_structured_output(_ReviewDraft)
+
+    feedback_block = "\n".join(
+        f"For record {ref}:\n" + "\n".join(feedback_by_ref[ref]) for ref in revise_refs
+    )
+    revise_state = state.model_copy(update={"records": revise_records})
+    messages = [
+        SystemMessage(_SYSTEM_PROMPT),
+        HumanMessage(
+            "A records officer reviewed your earlier redaction proposals and REJECTED some as "
+            "wrong, asking you to reconsider. Re-review ONLY the records below in light of the "
+            "officer's feedback. You may withhold differently, narrow the span, or — if no "
+            "withholding is truly grounded — propose NOTHING (disclosure is the default). Hold "
+            "every revised withholding to the same grounding bar (allowed rule_id, foreseeable "
+            "harm, complete test).\n\n"
+            f"OFFICER FEEDBACK:\n{feedback_block}\n\n"
+            f"{_human_prompt(revise_state, allowed_by_ref)}"
+        ),
+    ]
+
+    last_error: Optional[str] = None
+    for attempt in range(2):  # one revise + one §8.3 re-prompt, mirroring review_node
+        msgs = list(messages)
+        if attempt == 1 and last_error is not None:
+            msgs.append(
+                HumanMessage(
+                    f"Your revised response did not satisfy the grounding constraints: {last_error}. "
+                    "Return ONLY a valid object; ground every withholding in an allowed rule_id with "
+                    "a complete test, or propose nothing."
+                )
+            )
+        try:
+            draft = await _invoke_structured_draft(structured, msgs)
+        except _ReviseTransport as exc:
+            last_error = str(exc)
+            continue
+        err = _draft_validation_error(draft, revise_state, allowed_by_ref)
+        if err is not None:
+            last_error = err
+            continue
+        # Re-assemble the revised draft into validated proposals (same path).
+        return _assemble_proposals(draft, revise_state, provider)
+
+    raise ReviewUnrecoverableError(
+        state.case_id,
+        f"could not produce valid revised proposals after one re-prompt: {last_error}",
+    )
+
+
+class _ReviseTransport(RuntimeError):
+    """Internal marker for a transport/parse error during a revise invoke."""
+
+
+async def _invoke_structured_draft(structured, messages) -> _ReviewDraft:
+    """Invoke the structured LLM, normalizing transport errors to `_ReviseTransport`."""
+    try:
+        draft = await structured.ainvoke(messages)
+    except ValidationError as exc:
+        raise _ReviseTransport(
+            "; ".join(f"{'/'.join(str(p) for p in e['loc'])}: {e['msg']}" for e in exc.errors())
+        ) from exc
+    except Exception as exc:  # transport/parse
+        raise _ReviseTransport(str(exc)) from exc
+    if not isinstance(draft, _ReviewDraft):
+        draft = _ReviewDraft.model_validate(draft)
+    return draft
+
+
+def _assemble_proposals(
+    draft: _ReviewDraft, state: State, provider: PolicyProvider
+) -> list[RedactionProposal]:
+    """Shared assembly: draft → validated, pack-stamped, confidence-DERIVED proposals.
+
+    Extracted so both the main `assemble_node` path and the revise loop build
+    proposals identically (pack stamp from the seam, DERIVED confidence §8.1, FINAL
+    §8.3 validation; any surviving violation raises §8.2). Returns the proposal list.
+    """
+    pack_meta = provider.pack_metadata(state.jurisdiction)
+    allowed_by_ref = _allowed_rules_by_record(state.records, state.jurisdiction, provider)
+    in_scope = {rec.record_ref for rec in state.records}
+    records_by_ref = {rec.record_ref: rec for rec in state.records}
+
+    proposals: list[RedactionProposal] = []
+    for review in draft.reviews:
+        rec = records_by_ref.get(review.record_ref)
+        if rec is None:
+            raise ReviewUnrecoverableError(
+                state.case_id,
+                f"revised review references record_ref {review.record_ref!r}, not in scope.",
+                record_ref=review.record_ref,
+            )
+        allowed = allowed_by_ref.get(review.record_ref, [])
+        for r in review.redactions:
+            rule = next((rl for rl in allowed if rl.id == r.rule_id), None)
+            if rule is None:
+                raise ReviewUnrecoverableError(
+                    state.case_id,
+                    f"revised rule_id {r.rule_id!r} not in allowed set for {rec.record_type!r}.",
+                    record_ref=review.record_ref,
+                )
+            try:
+                proposal = _draft_to_proposal(r, rec, state, allowed, _placeholder_confidence())
+            except (ValidationError, ValueError) as exc:
+                raise ReviewUnrecoverableError(
+                    state.case_id,
+                    f"a revised redaction failed boundary validation: {exc}",
+                    record_ref=review.record_ref,
+                ) from exc
+            confidence = derive_confidence(rule, proposal.test_result, self_consistency=None)
+            proposal = proposal.model_copy(
+                update={
+                    "pack_id": pack_meta.pack_id,
+                    "pack_version": pack_meta.version,
+                    "confidence": confidence,
+                }
+            )
+            violations = validate_proposal(proposal, allowed, in_scope)
+            if violations:
+                v = violations[0]
+                raise ReviewUnrecoverableError(
+                    state.case_id,
+                    f"§8.3 validation failed on a revised proposal [{v.kind}] for {v.rule_id!r}: {v.detail}.",
+                    record_ref=review.record_ref,
+                )
+            proposals.append(proposal)
+    return proposals
+
+
+async def approval_gate_node(state: State) -> ReviewResult:
+    """§5 redaction-approval HUMAN GATE: interrupt, bounded revise loop, emit ApprovedRedaction[].
+
+    Flow per round:
+      1. Surface the pending proposals via `interrupt(CreateEscalation(...))` →
+         pause → resume with the officer's decisions (`ApprovalResume`).
+      2. Apply each decision:
+         * accept → emit an `ApprovedRedaction(decision='approved')`.
+         * edit   → re-locate the officer's edited quote, emit
+                    `ApprovedRedaction(decision='edited', edited_span=...)`.
+         * reject + revise=False → RELEASE the content: emit a recorded
+           `ApprovedRedaction(decision='rejected')` (NO approved bytes; the
+           release guard would block it if baked in) — the disclosure default.
+         * reject + revise=True  → queue for the revise loop.
+         * no decision for a proposal → SAFE DEFAULT = rejected/released (never
+           silently approved; the burden is on withholding).
+      3. If any proposals were queued to revise AND rounds remain
+         (`max_revise_rounds()`), re-run the targeted reasoning (`_revise_proposals`)
+         and loop to step 1 with the new proposals. When the bound is exhausted,
+         any still-unresolved revise items fall back to the disclosure default
+         (recorded as 'rejected') — NOT withheld.
+
+    The approval_token on every emitted ApprovedRedaction is derived from the
+    SPECIFIC completed Action Center task (or, locally, deterministically from the
+    proposal identity) — never invented. approved_content_hash is the record-level
+    §8.4 hash over all approved/edited spans on that record (shared mask helper),
+    so the release guard's recompute matches. The original proposals are echoed for
+    audit. Confidence stays DERIVED; the agent never withholds on its own authority.
+
+    A clean case (zero proposals) needs no human gate: the agent returns an empty
+    `approved` set immediately — there is nothing to withhold, which IS the
+    disclosure default. (Maestro still routes to the §3c final-release approval.)
+    """
+    provider = _build_policy_provider()
+    pack_meta = provider.pack_metadata(state.jurisdiction)
+    records_by_ref = {rec.record_ref: rec for rec in state.records}
+    now = datetime.now(timezone.utc)
+
+    # Nothing proposed ⇒ nothing to approve. Skip the interrupt entirely.
+    if not state.proposals:
+        return ReviewResult(approved=[], proposals=state.proposals, reviewed=state.reviewed)
+
+    # Accumulators that span ALL rounds. The §8.4 hash is RECORD-LEVEL over EVERY
+    # approved/edited span on a record, regardless of which round approved it — the
+    # release step applies all of a record's approved spans together, so the hash
+    # MUST be computed over the full per-record set, not per round (else a span
+    # approved in round 0 and another approved after a revise in round 1 would each
+    # carry a partial hash and the §8.4 guard would block an honest release). So we
+    # DEFER hash computation until the loop terminates: collect the approved/edited
+    # spans per record here, and the emissions (with their token) separately, then
+    # stamp the record-level hash on every emission at the end.
+    rejected_out: list[ApprovedRedaction] = []  # released-content records (any round)
+    approved_spans_by_record: dict[str, list[tuple[str, int, int]]] = {}
+    # Each pending emission: (proposal, decision, kind, approval_token). The hash is
+    # filled in after the loop from `approved_spans_by_record`.
+    pending_emissions: list[tuple[RedactionProposal, OfficerDecision, str, str]] = []
+
+    pending: list[RedactionProposal] = list(state.proposals)
+    bound = max_revise_rounds()
+
+    round_no = 0
+    while pending:
+        resume, raw_resume = _surface_for_review(pending, round_no, state.officer)
+        decisions_by_id = {d.proposal_id: d for d in resume.decisions}
+
+        revise_queue: list[tuple[RedactionProposal, OfficerDecision]] = []
+
+        for proposal in pending:
+            pid = _proposal_id(proposal, round_no)
+            decision = decisions_by_id.get(pid)
+
+            # No decision OR an explicit non-revise reject ⇒ RELEASE (disclosure
+            # default). Record it as 'rejected' (not baked into the release).
+            if decision is None or (decision.decision == "reject" and not decision.revise):
+                note = decision.note if decision else "no officer decision; defaulted to release"
+                rejected_out.append(
+                    _rejected_approved_redaction(proposal, state, now, pack_meta, note)
+                )
+                continue
+
+            if decision.decision == "reject" and decision.revise:
+                revise_queue.append((proposal, decision))
+                continue
+
+            if decision.decision == "edit":
+                edited_span = _edited_span_for(proposal, decision, records_by_ref, state)
+                approved_spans_by_record.setdefault(proposal.record_ref, []).append(
+                    ("edited", edited_span.start, edited_span.end)
+                )
+                # Token is bound to THIS round's completed task identity (W1: from
+                # the RAW resume value, not the normalized decisions).
+                token = _approval_token(raw_resume, decision, pid)
+                pending_emissions.append((proposal, decision, "edited", token))
+                continue
+
+            if decision.decision == "accept":
+                approved_spans_by_record.setdefault(proposal.record_ref, []).append(
+                    ("approved", proposal.span.start, proposal.span.end)
+                )
+                token = _approval_token(raw_resume, decision, pid)
+                pending_emissions.append((proposal, decision, "approved", token))
+                continue
+
+            # Unknown decision string ⇒ safe default = release.
+            rejected_out.append(
+                _rejected_approved_redaction(
+                    proposal, state, now, pack_meta,
+                    f"unrecognized decision {decision.decision!r}; defaulted to release",
+                )
+            )
+
+        # Reject→revise loop (§5.C), bounded.
+        if revise_queue:
+            if round_no < bound:
+                pending = await _revise_proposals(revise_queue, state, provider)
+                round_no += 1
+                continue
+            # Bound exhausted: unresolved revise items fall back to the disclosure
+            # default (released, recorded), NOT withheld.
+            for proposal, decision in revise_queue:
+                rejected_out.append(
+                    _rejected_approved_redaction(
+                        proposal, state, now, pack_meta,
+                        (decision.note or "")
+                        + " [revise bound reached; defaulted to release per disclosure default]",
+                    )
+                )
+        pending = []  # no more pending in this iteration
+
+    # Loop done. Now stamp the RECORD-LEVEL §8.4 hash on every approved/edited
+    # emission — over ALL approved/edited spans on the record across all rounds, so
+    # it is byte-identical to what `steps/release_step.py` recomputes and the §8.4
+    # guard re-checks. Every emission on a record therefore carries the same hash.
+    hash_by_record: dict[str, str] = {
+        ref: _approved_content_hash(records_by_ref[ref], spans)
+        for ref, spans in approved_spans_by_record.items()
+    }
+    decisions_out: list[ApprovedRedaction] = list(rejected_out)
+    for proposal, decision, kind, token in pending_emissions:
+        decisions_out.append(
+            _decided_approved_redaction(
+                proposal, decision, kind, state, now, pack_meta, token,
+                hash_by_record[proposal.record_ref], records_by_ref,
+            )
+        )
+
+    return ReviewResult(
+        approved=decisions_out, proposals=state.proposals, reviewed=state.reviewed
+    )
+
+
+def _edited_span_for(
+    proposal: RedactionProposal,
+    decision: OfficerDecision,
+    records_by_ref: dict[str, CandidateRecord],
+    state: State,
+) -> Span:
+    """Re-locate the officer's edited quote in the record → the edited Span (§5).
+
+    The officer supplies the adjusted verbatim `edited_quote`, never offsets (same
+    grounding discipline as the model). We locate it uniquely in the record text
+    and derive the span, so `record.text[start:end] == edited_quote` by
+    construction. A missing/absent/ambiguous edited quote falls back to the
+    originally proposed span (the edit cannot be grounded) and is noted — it never
+    fabricates an offset. Returns a `Span`.
+    """
+    rec = records_by_ref.get(proposal.record_ref)
+    quote = (decision.edited_quote or "").strip()
+    if rec is None or rec.text is None or not quote:
+        return proposal.span
+    first = rec.text.find(quote)
+    if first == -1 or rec.text.find(quote, first + 1) != -1:
+        # Absent or ambiguous: cannot ground the edit; keep the proposed span.
+        return proposal.span
+    return Span(
+        record_ref=proposal.record_ref,
+        start=first,
+        end=first + len(quote),
+        unit="char",
+        quote=quote,
+    )
+
+
+def _decided_approved_redaction(
+    proposal: RedactionProposal,
+    decision: OfficerDecision,
+    kind: str,
+    state: State,
+    now: datetime,
+    pack_meta,
+    approval_token: str,
+    approved_content_hash: str,
+    records_by_ref: dict[str, CandidateRecord],
+) -> ApprovedRedaction:
+    """Build an emitted `ApprovedRedaction` for an accepted/edited proposal (§5, §8.4)."""
+    edited_span = None
+    if kind == "edited":
+        edited_span = _edited_span_for(proposal, decision, records_by_ref, state)
+    return ApprovedRedaction(
+        case_id=proposal.case_id,
+        jurisdiction=proposal.jurisdiction,
+        pack_id=pack_meta.pack_id,
+        pack_version=pack_meta.version,
+        record_ref=proposal.record_ref,
+        span=proposal.span,
+        rule_id=proposal.rule_id,
+        citation=proposal.citation,
+        rationale=proposal.rationale,
+        test_result=proposal.test_result,
+        decision=kind,  # 'approved' | 'edited'
+        officer=state.officer,
+        decided_at=now,
+        officer_note=decision.note,
+        edited_span=edited_span,
+        approval_token=approval_token,
+        approved_content_hash=approved_content_hash,
+    )
+
+
+def _rejected_approved_redaction(
+    proposal: RedactionProposal,
+    state: State,
+    now: datetime,
+    pack_meta,
+    note: Optional[str],
+) -> ApprovedRedaction:
+    """Build a recorded `ApprovedRedaction(decision='rejected')` — content RELEASED (§5).
+
+    A rejected over-redaction releases its content (the disclosure default): it is
+    NOT baked into the release (the §8.4 guard blocks any 'rejected' redaction that
+    slips through). It is recorded for the audit trail and the corrections log
+    (advisory, §7). Because the contract requires Strict, non-empty token + hash,
+    we stamp explicit NON-RELEASABLE sentinels that the release guard rejects by
+    construction (a 'rejected' decision is blocked regardless), making it
+    impossible to mistake a rejection for an approval.
+    """
+    return ApprovedRedaction(
+        case_id=proposal.case_id,
+        jurisdiction=proposal.jurisdiction,
+        pack_id=pack_meta.pack_id,
+        pack_version=pack_meta.version,
+        record_ref=proposal.record_ref,
+        span=proposal.span,
+        rule_id=proposal.rule_id,
+        citation=proposal.citation,
+        rationale=proposal.rationale,
+        test_result=proposal.test_result,
+        decision="rejected",
+        officer=state.officer,
+        decided_at=now,
+        officer_note=note,
+        edited_span=None,
+        # Sentinels: a 'rejected' redaction must never release bytes. These are
+        # well-formed (StrictStr) but carry no real approval; the §8.4 guard
+        # rejects any 'rejected' redaction outright, so they can never leak.
+        approval_token="rejected-no-approval",
+        approved_content_hash="0" * 64,
+    )
 
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Graph wiring
 #
-# SEAM for Milestone-2 (the redaction-approval HITL): the §5 redaction-approval
-# gate is a LangGraph INTERRUPT inside THIS agent — the officer's accept/reject/
-# edit must re-enter the graph to drive the revise loop. That interrupt + the
-# corrections-memory lookup (advisory, §7) attach as nodes AFTER `assemble` in
-# Milestone 2; this thin agent stops at emitting validated proposals. Adding the
-# interrupt is an additive node + edge, not a reshape of these two nodes.
+# §5 redaction-approval HITL: the gate is a LangGraph INTERRUPT inside THIS agent
+# (`approval_gate`), so the officer's accept/reject/edit re-enters the graph and
+# drives the bounded revise loop. This is the ONLY new control construct — still
+# one single-purpose graph, no supervisor, no cross-stage routing. The
+# corrections-memory lookup (advisory, §7) and self-consistency sampling (§8.1c)
+# remain additive future nodes; this gate does not depend on them.
 # ─────────────────────────────────────────────────────────────────────────────
 
 builder = StateGraph(State, input=GraphInput, output=ReviewResult)
 builder.add_node("review", review_node)
 builder.add_node("assemble", assemble_node)
+builder.add_node("approval_gate", approval_gate_node)
 builder.add_edge(START, "review")
 builder.add_edge("review", "assemble")
-builder.add_edge("assemble", END)
+builder.add_edge("assemble", "approval_gate")
+builder.add_edge("approval_gate", END)
 
 graph = builder.compile()

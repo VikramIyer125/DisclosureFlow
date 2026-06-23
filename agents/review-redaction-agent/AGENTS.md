@@ -27,9 +27,11 @@ confidence signal (§8.1), §8.3-validated at the boundary.
 a foreseeable-harm standard. This agent:
 - **never withholds by default** — zero proposals on a record is the common,
   correct outcome (a fully disclosable record);
-- **never withholds on its own authority** — it only *proposes*. A human records
-  officer approves every withholding **downstream**. This thin Milestone-1 agent
-  EMITS proposals; it does not contain the approval gate (see "Milestone-2 seam").
+- **never withholds on its own authority** — it *proposes*, then a human records
+  officer approves/rejects/edits every proposed withholding at the §5 gate
+  (a LangGraph interrupt INSIDE this agent, `approval_gate`). ONLY after the human
+  decides does the agent emit `ApprovedRedaction[]`. A REJECTED over-redaction
+  RELEASES its content (the disclosure default holds THROUGH the gate).
 - **must justify every withholding** against a specific PolicyProvider `rule_id`,
   with a source-grounded foreseeable-harm `rationale` and a complete legal test.
   The burden is on withholding, mirroring FOIA's presumption of openness.
@@ -39,11 +41,19 @@ cross-stage sequencing or routing. The reject→revise loop, the high-confidence
 batch-vs-full-review routing, and the dead-letter routing all live in the Maestro
 Case model, not in this graph (CLAUDE.md hard rule 1a).
 
-## Graph shape (single stage, linear)
+## Graph shape (stage-4 reasoning + the §5 human gate)
 
 ```
-START → review → assemble → END
+START → review → assemble → approval_gate → END
+                              └─(reject→revise)→ re-run targeted review → re-interrupt (bounded)
 ```
+
+The agent performs stage-4 reasoning (`review` + `assemble`) AND the §5
+redaction-approval human gate (`approval_gate`), which the brief explicitly places
+**inside this agent as a LangGraph interrupt** so the officer's feedback re-enters
+this graph to drive the revise loop. This is still ONE single-purpose graph: it
+never calls the other agents and adds no cross-stage routing. The interrupt is the
+only new control construct.
 
 - **review** (LLM, Opus 4.8 per §9): for each record, decides `is_responsive`
   and proposes zero-or-more redactions into a constrained internal `_ReviewDraft`
@@ -62,31 +72,114 @@ START → review → assemble → END
   (`pack_id`/`pack_version` from `pack_metadata` — never the model), DERIVES
   confidence via `derive_confidence(rule, test_result)` (§8.1 — never a model
   field), and runs the FINAL §8.3 `validate_proposal`. Any surviving violation
-  RAISES `ReviewUnrecoverableError`. Returns the `ReviewResult` envelope.
+  RAISES `ReviewUnrecoverableError`. Writes the validated `proposals` + the
+  responsiveness echo into `State` for the gate (shared assembly is factored into
+  `_assemble_proposals`, used by both this node and the revise loop).
+- **approval_gate** (the §5 HUMAN GATE — legally load-bearing): surfaces the
+  proposals to a records officer via `interrupt(CreateEscalation(...))` (an Action
+  Center task), PAUSES, and on resume applies the officer's per-proposal decision:
+  - **accept** → emit `ApprovedRedaction(decision="approved")`.
+  - **edit** → re-locate the officer's `edited_quote` in the record (same
+    quote-grounding discipline as the model; never trust officer offsets) → emit
+    `ApprovedRedaction(decision="edited", edited_span=...)`.
+  - **reject + `revise=false`** → the over-redaction is WRONG: the content is
+    RELEASED (disclosure default). Recorded as `ApprovedRedaction(decision="rejected")`
+    with a no-approval sentinel token (the §8.4 guard blocks any `rejected`
+    redaction outright, so it can never leak); surfaced for the corrections log
+    (advisory, §7).
+  - **reject + `revise=true`** → queue for the §5.C reject→revise loop.
+  - **no decision** for a proposal → SAFE DEFAULT = released/`rejected` (the burden
+    is on withholding — silence never approves).
+  After applying decisions, any revise-queued proposals are re-reasoned
+  (`_revise_proposals` re-runs the targeted `review` reasoning with the officer's
+  note, then `_assemble_proposals` re-validates §8.3) and **re-interrupted** for
+  re-review — bounded by `max_revise_rounds()` (config, default 1). When the bound
+  is reached, unresolved revise items fall back to the disclosure default
+  (recorded `rejected`, NOT withheld). Returns the final `ReviewResult`.
+
+  Clean case (zero proposals): the gate skips the interrupt entirely and returns an
+  empty `approved` set — nothing to withhold IS the disclosure default. (Maestro
+  still routes the package to the §3c final-release User Task downstream.)
 
 ## I/O contract
 
 - **Input** = `GraphInput`: a list of locked `CandidateRecord`s (`records`) plus
   `case_id` / `jurisdiction` (the top-level identity threaded onto every emitted
-  proposal). `case_id` and `records` are required; `jurisdiction` defaults. The
-  agent does NO RecordStore I/O — Maestro hands it the records after the fan-out,
-  so it stays a pure reasoning unit (independently runnable from a fixture). Each
-  `CandidateRecord.text` is what the model reads to find exemptions; a record with
-  no text is marked non-responsive (it cannot be assessed).
+  proposal) and `officer` (default `"records.officer"` — the Action Center
+  assignee + the identity stamped on each `ApprovedRedaction.officer`; the
+  authoritative `approval_token` still comes from the completed task, not this
+  field). `case_id` and `records` are required; `jurisdiction` / `officer` default.
+  The agent does NO RecordStore I/O — Maestro hands it the records after the
+  fan-out, so it stays a pure reasoning unit (independently runnable from a
+  fixture). Each `CandidateRecord.text` is what the model reads to find exemptions;
+  a record with no text is marked non-responsive (it cannot be assessed).
+- **Resume payload** (the §5 gate's human input) = `ApprovalResume{decisions:
+  [OfficerDecision]}`, where `OfficerDecision = {proposal_id, decision ∈
+  accept|reject|edit, edited_quote?, revise: bool, note?}`. Delivered as the
+  completed Action Center task (platform) or the `uipath run --resume` JSON
+  (local); both are normalized into `ApprovalResume`. These are AGENT-LOCAL
+  schemas shaping the human input — NOT pipeline contracts.
 - **Output** = `ReviewResult`, a **thin agent-local envelope**:
-  - `proposals: list[RedactionProposal]` — every proposed withholding across all
-    records, each §8.3-validated with confidence DERIVED.
+  - `approved: list[ApprovedRedaction]` — the §10 stage-5 officer decisions after
+    the §5 gate. Only `approved`/`edited` entries carry release-bound bytes
+    (`approval_token` + `approved_content_hash`, §8.4); `rejected` entries record
+    a released-content decision for audit/corrections. **This is now the agent's
+    authoritative output** — a human has decided.
+  - `proposals: list[RedactionProposal]` — every proposal originally proposed
+    (each §8.3-validated, confidence DERIVED), kept for the audit trail (what was
+    proposed vs. what was approved).
   - `reviewed: list[RecordReview]` — the per-record responsiveness decisions
     (`record_ref`, `is_responsive`, `proposal_count`) so Maestro can mark
     non-responsive records and distinguish a responsive record with ZERO
     proposals (clean, fully disclosable) from a non-responsive one.
 
-  The §10 stage-4 contract is `RedactionProposal[]` (a list), but a uipath/
-  LangGraph OUTPUT schema must have an object root, so the graph wraps the list.
-  `ReviewResult` **composes** the locked, shared `RedactionProposal` — it does not
-  redefine it. It is deliberately **not** a new shared pipeline contract (that
-  would be the IntakeResult mistake); mirrors the Custodian agent's `SearchPlan`.
-  See ASSUMPTIONS.md.
+  `ReviewResult` **composes** the locked, shared `RedactionProposal` and
+  `ApprovedRedaction` — it does not redefine them. It is deliberately **not** a new
+  shared pipeline contract (that would be the IntakeResult mistake); mirrors the
+  Custodian agent's `SearchPlan`. See ASSUMPTIONS.md.
+
+### §5 redaction-approval gate — interrupt API, approval_token, content hash (§8.4)
+
+- **Interrupt primitive (installed SDK):** `interrupt(CreateEscalation(...))` from
+  `uipath.platform.common` — confirmed against the *installed* `uipath` 2.11.x
+  split packages (`uipath_core`/`uipath_runtime`/`uipath_langchain`). The older
+  `interrupt(CreateAction(...))` documented in Context7 / the case-model-spec is
+  the pre-split 2.x monolithic API and is **not importable in this version**; the
+  install uses `CreateEscalation` (the same `CreateTask` shape: `app_name`,
+  `app_folder_path`, `title`, `data`, `assignee`). See ASSUMPTIONS.md. The import
+  is lazy inside the node so `uipath init` / non-platform contexts don't require it.
+- **Action Center task payload** (`CreateEscalation.data`) carries, per proposal:
+  `record_ref`, `span` (start/end/quote), `rule_id`, `citation`, `rationale`,
+  `test_result`, and the DERIVED `confidence` (+ `full_individual_review_required`
+  = `confidence.level == "low"`). Per §5 this lets the app present b6/b7c
+  (always `low`/balancing) for **full individual review** and group high-confidence
+  non-balancing (e.g. b5 high) for lighter approval. Plus a deterministic
+  `idempotency_key = "<case_id>:redaction_review:round<N>"` (§8.5).
+- **`approval_token` derivation** (tied to the SPECIFIC human approval, never
+  invented): from the completed Action Center task's durable identity on resume —
+  its `key` (GUID) or `id` — as `"actiontask:<task_key>:<proposal_id>"` (per-proposal
+  so two proposals in one task get distinct, guard-matchable tokens). LOCAL/test
+  fallback (a plain `--resume` JSON with no task identity):
+  `"local-approval:<sha256(proposal_id)>"` — still a real, reproducible binding to
+  the specific approved proposal (not random), so a replay yields the same token
+  (idempotent). A `rejected` decision gets the sentinel `"rejected-no-approval"`.
+- **`approved_content_hash` (§8.4)** = `sha256` of the **record-level**
+  post-redaction bytes: ALL of that record's `approved`/`edited` spans applied with
+  the shared `█` length-preserving mask (`shared/release/mask.py`), UTF-8 encoded.
+  This is computed via the SAME `shared.release.mask.redacted_content_hash` the
+  release step uses, so the hash is **byte-identical** to what
+  `steps/release_step.py` recomputes and the §8.4 release guard re-checks — cross-
+  verified locally (the agent's approvals feed the real release step and the guard
+  ALLOWS the release). Every `ApprovedRedaction` on a record carries the same
+  record-level hash (matching the release step's per-record expectation).
+- **Idempotency (§8.5):** `interrupt()` is memoized by LangGraph checkpointing, so
+  a pause/resume/replay does NOT recreate the task or double-emit. Task `data` and
+  `proposal_id` are keyed deterministically by `case_id` + `record_ref` + span +
+  `round`, so a replay computes identical keys.
+- **Revise bound:** `MAX_REVISE_ROUNDS` (config, `config.max_revise_rounds()`,
+  default 1). After the bound, unresolved revise items resolve to the disclosure
+  default (released, recorded `rejected`) — never an infinite human/agent loop,
+  never a silent withholding.
 
 Each emitted `RedactionProposal` carries: identity (`case_id`/`jurisdiction`), the
 pack stamp (`pack_id`/`pack_version` from the seam), `record_ref` (in the input
@@ -214,17 +307,23 @@ hardcodes rule ids, citations, or counts (brief §7). Adding a new exemption is 
 pack edit, not a code change. `get_rule` is available for citation lookup;
 `pack_metadata` provides the `PackStamp` (`pack_id`/`version`).
 
-## Milestone-2 seam (do NOT build now)
+## §5 gate BUILT — remaining additive seams (do NOT build now)
 
-The §5 **redaction-approval gate is a LangGraph INTERRUPT inside THIS agent** —
-the officer's accept/reject/edit must re-enter the graph to drive the revise loop
-(that is why it is an interrupt here, not a Maestro User Task). That interrupt,
-plus the advisory **corrections-memory lookup** (§7) and **self-consistency
-sampling** (§8.1c), attach as nodes AFTER `assemble` in Milestone 2 / Milestone 5.
-This thin agent stops at emitting validated proposals. Adding them is additive
-(new nodes + edges), not a reshape of `review`/`assemble`. Clean seams are noted
-in `main.py` (the graph-wiring comment) and in `derive_confidence`'s
-`self_consistency` param.
+The §5 **redaction-approval gate is a LangGraph INTERRUPT inside THIS agent**
+(`approval_gate`) and is **now built** (see "Graph shape" / the §5 I/O section).
+Two additive enhancements still attach AFTER this gate / inside `assemble` without
+reshaping it:
+- **Corrections-memory lookup** (advisory, §7): before/within the gate, retrieve
+  past officer corrections for the record context and surface them into the Action
+  Center task payload (advisory only — never sets `rule_id`/confidence, never
+  bypasses the human gate). The reject/edit decisions this gate already records are
+  the corrections-log writes' source.
+- **Self-consistency sampling** (§8.1c, stretch): re-run the `review` step 3–5× and
+  feed the disagreement into `derive_confidence(..., self_consistency=...)` (the
+  third param is already wired; `assemble` passes `None` today). This is the only
+  agent that runs it.
+Both are additive (new lookups/passes), not a reshape of `review`/`assemble`/
+`approval_gate`.
 
 ## Hard rules honoured
 
@@ -309,3 +408,31 @@ Without `ANTHROPIC_API_KEY` (and with no readable Orchestrator asset) the run
 RAISES `ReviewUnrecoverableError` (the §8.2 permanent-precondition path) rather
 than returning a fake proposal — on UiPath this routes the case to the human
 dead-letter queue.
+
+### §5 gate — interrupt + resume (live vs. local)
+
+A full `uipath run agent --file fixtures/records_exemption_heavy.json` runs the
+live LLM (`review`→`assemble`) and then HITS the interrupt: the uipath runtime
+tries to CREATE the real Action Center task by resolving the action app
+`DisclosureFlow_RedactionReview` and pauses. That step needs (a) a valid
+`UIPATH_ACCESS_TOKEN` and (b) the deployed review action app — **net-new platform
+artifacts** authored separately (case-model-spec §10). Until they exist the live
+run reaches `create_trigger` and reports a 401 on the app lookup (proving the
+interrupt fires and reaches the real task-creation path).
+
+The gate's pause/resume + decision/revise/emit LOGIC is verified locally without
+the platform by driving `approval_gate_node` with a LangGraph `MemorySaver`
+checkpointer and `Command(resume={"decisions":[...]})` — covering ACCEPT
+(→ ApprovedRedaction with token + record-level hash), EDIT (officer `edited_quote`
+re-located → `edited_span`), REJECT-as-release (→ content released, sentinel
+token), the REJECT→revise round (re-interrupt with the revised proposal), and the
+revise bound → disclosure-default fallback. The emitted approvals were fed into the
+real `steps/release_step.py`: the §8.4 guard ALLOWS the release (token + hash
+verify), confirming the agent's `approved_content_hash` matches the release step's
+recompute. PENDING the real Action Center: the platform `--resume` round-trip with
+a live task (run as part of the deploy round-trip).
+
+The redaction-mask convention (`█`, length-preserving) is the §8.4 single source of
+truth in `shared/release/mask.py`, imported by BOTH this agent (for the approval
+hash) and `steps/release_step.py` (for re-application) — so the two can never
+diverge and silently block every honest release.

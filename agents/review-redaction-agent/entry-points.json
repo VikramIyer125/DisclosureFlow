@@ -4,7 +4,7 @@
     "entryPoints": [
         {
             "filePath": "agent",
-            "uniqueId": "24e57db3-91c8-44ae-ba5b-ffbff27bac04",
+            "uniqueId": "ead9ea17-e2f6-45f1-a634-4cc9d0a3472b",
             "type": "agent",
             "input": {
                 "type": "object",
@@ -85,6 +85,12 @@
                         },
                         "title": "Records",
                         "type": "array"
+                    },
+                    "officer": {
+                        "default": "records.officer",
+                        "description": "Identity recorded on each ApprovedRedaction.officer and used as the default Action Center assignee for the \u00a75 approval task. Stamped on the decision so the audit trail names who approved; the authoritative approval_token still comes from the completed task identity, not this field.",
+                        "title": "Officer",
+                        "type": "string"
                     }
                 },
                 "required": [
@@ -95,8 +101,264 @@
             "output": {
                 "type": "object",
                 "properties": {
+                    "approved": {
+                        "description": "Officer decisions after the \u00a75 human gate. Only 'approved'/'edited' entries carry release-bound bytes (approval_token + approved_content_hash, \u00a78.4); 'rejected' entries are recorded for audit/corrections but release their content (disclosure default).",
+                        "items": {
+                            "additionalProperties": false,
+                            "description": "An officer's decision on one proposed redaction (\u00a75, \u00a78.4, \u00a710).\n\nCarries the proposal evidence plus the human decision. `approval_token` and\n`approved_content_hash` are the \u00a78.4 inputs the release-integrity guard\nconsumes \u2014 both Strict so a missing/garbled token cannot coerce into a\ntruthy value. `edited_span` is set only when `decision == \"edited\"`.",
+                            "properties": {
+                                "pack_id": {
+                                    "description": "PolicyProvider pack id, e.g. 'federal-foia'.",
+                                    "title": "Pack Id",
+                                    "type": "string"
+                                },
+                                "pack_version": {
+                                    "description": "Pack semantic version the decision was grounded in.",
+                                    "title": "Pack Version",
+                                    "type": "string"
+                                },
+                                "case_id": {
+                                    "description": "Maestro case instance id; ties every contract to one case.",
+                                    "title": "Case Id",
+                                    "type": "string"
+                                },
+                                "jurisdiction": {
+                                    "default": "federal_foia",
+                                    "description": "Legal regime. Only 'federal_foia' in MVP; kept a str so new regimes are additive.",
+                                    "title": "Jurisdiction",
+                                    "type": "string"
+                                },
+                                "record_ref": {
+                                    "description": "Record the decision concerns.",
+                                    "title": "Record Ref",
+                                    "type": "string"
+                                },
+                                "span": {
+                                    "additionalProperties": false,
+                                    "description": "A located region inside a record (the unit a redaction or correction targets).\n\n`unit` defaults to ``\"char\"``; ``\"token\"`` and ``\"page_bbox\"`` are carried so a\nfuture document-understanding backing can address regions natively without a\ncontract change.",
+                                    "properties": {
+                                        "record_ref": {
+                                            "description": "Stable id of the record this span lives in.",
+                                            "title": "Record Ref",
+                                            "type": "string"
+                                        },
+                                        "start": {
+                                            "description": "Inclusive start offset in `unit`s.",
+                                            "minimum": 0,
+                                            "title": "Start",
+                                            "type": "integer"
+                                        },
+                                        "end": {
+                                            "description": "Exclusive end offset in `unit`s.",
+                                            "minimum": 0,
+                                            "title": "End",
+                                            "type": "integer"
+                                        },
+                                        "unit": {
+                                            "default": "char",
+                                            "description": "Addressing unit for start/end.",
+                                            "enum": [
+                                                "char",
+                                                "token",
+                                                "page_bbox"
+                                            ],
+                                            "title": "Unit",
+                                            "type": "string"
+                                        },
+                                        "quote": {
+                                            "type": "string"
+                                        }
+                                    },
+                                    "required": [
+                                        "record_ref",
+                                        "start",
+                                        "end"
+                                    ],
+                                    "title": "Span",
+                                    "type": "object"
+                                },
+                                "rule_id": {
+                                    "description": "Grounding rule id from the proposal. Strict.",
+                                    "title": "Rule Id",
+                                    "type": "string"
+                                },
+                                "citation": {
+                                    "description": "Statutory citation from the proposal.",
+                                    "title": "Citation",
+                                    "type": "string"
+                                },
+                                "rationale": {
+                                    "description": "Rationale from the proposal (officer may have noted edits separately).",
+                                    "title": "Rationale",
+                                    "type": "string"
+                                },
+                                "test_result": {
+                                    "additionalProperties": false,
+                                    "description": "Generic, data-driven result of applying a rule's legal test (spec item 4).\n\n`elements` is keyed by element name; the *required* names come from\n`Rule.required_test_elements`, never hardcoded here. The \u00a78.3 completeness\ncheck lives in ``shared.contracts.validation`` as a pure function, not a\nmodel validator, because a failure is control flow (re-prompt OR route to\nhuman) that sits above the type.",
+                                    "properties": {
+                                        "test": {
+                                            "description": "Which legal-test family was applied (mirrors the Rule.test).",
+                                            "enum": [
+                                                "categorical",
+                                                "balancing",
+                                                "foreseeable_harm"
+                                            ],
+                                            "title": "Test",
+                                            "type": "string"
+                                        },
+                                        "elements": {
+                                            "additionalProperties": {
+                                                "additionalProperties": false,
+                                                "description": "One filled element of a legal test (\u00a78.1b, \u00a78.3).\n\n`hedged=True` or an empty `value`/`evidence` marks the element as incomplete,\nwhich the confidence derivation reads as low confidence and the \u00a78.3 validator\nreads as a completeness violation.",
+                                                "properties": {
+                                                    "value": {
+                                                        "description": "The agent's finding for this element.",
+                                                        "title": "Value",
+                                                        "type": "string"
+                                                    },
+                                                    "evidence": {
+                                                        "description": "Source-grounded support for the finding.",
+                                                        "title": "Evidence",
+                                                        "type": "string"
+                                                    },
+                                                    "hedged": {
+                                                        "default": false,
+                                                        "description": "True if the model hedged/was uncertain on this element.",
+                                                        "title": "Hedged",
+                                                        "type": "boolean"
+                                                    }
+                                                },
+                                                "required": [
+                                                    "value",
+                                                    "evidence"
+                                                ],
+                                                "title": "TestElement",
+                                                "type": "object"
+                                            },
+                                            "description": "element_name -> filled TestElement.",
+                                            "title": "Elements",
+                                            "type": "object"
+                                        }
+                                    },
+                                    "required": [
+                                        "test"
+                                    ],
+                                    "title": "ExemptionTestResult",
+                                    "type": "object"
+                                },
+                                "decision": {
+                                    "description": "Officer decision. 'rejected'/'edited' feed the corrections log (\u00a77) and revise loop (\u00a72).",
+                                    "enum": [
+                                        "approved",
+                                        "rejected",
+                                        "edited"
+                                    ],
+                                    "title": "Decision",
+                                    "type": "string"
+                                },
+                                "officer": {
+                                    "description": "Identity of the deciding officer.",
+                                    "title": "Officer",
+                                    "type": "string"
+                                },
+                                "decided_at": {
+                                    "description": "When the decision was made (Clock seam).",
+                                    "format": "date-time",
+                                    "title": "Decided At",
+                                    "type": "string"
+                                },
+                                "officer_note": {
+                                    "type": "string"
+                                },
+                                "edited_span": {
+                                    "additionalProperties": false,
+                                    "description": "A located region inside a record (the unit a redaction or correction targets).\n\n`unit` defaults to ``\"char\"``; ``\"token\"`` and ``\"page_bbox\"`` are carried so a\nfuture document-understanding backing can address regions natively without a\ncontract change.",
+                                    "properties": {
+                                        "record_ref": {
+                                            "description": "Stable id of the record this span lives in.",
+                                            "title": "Record Ref",
+                                            "type": "string"
+                                        },
+                                        "start": {
+                                            "description": "Inclusive start offset in `unit`s.",
+                                            "minimum": 0,
+                                            "title": "Start",
+                                            "type": "integer"
+                                        },
+                                        "end": {
+                                            "description": "Exclusive end offset in `unit`s.",
+                                            "minimum": 0,
+                                            "title": "End",
+                                            "type": "integer"
+                                        },
+                                        "unit": {
+                                            "default": "char",
+                                            "description": "Addressing unit for start/end.",
+                                            "enum": [
+                                                "char",
+                                                "token",
+                                                "page_bbox"
+                                            ],
+                                            "title": "Unit",
+                                            "type": "string"
+                                        },
+                                        "quote": {
+                                            "anyOf": [
+                                                {
+                                                    "type": "string"
+                                                },
+                                                {
+                                                    "type": "null"
+                                                }
+                                            ],
+                                            "default": null,
+                                            "description": "Optional verbatim text of the span, for human review / audit.",
+                                            "title": "Quote"
+                                        }
+                                    },
+                                    "required": [
+                                        "record_ref",
+                                        "start",
+                                        "end"
+                                    ],
+                                    "title": "Span",
+                                    "type": "object"
+                                },
+                                "approval_token": {
+                                    "description": "Token tied to this specific human approval (\u00a78.4). Strict: never coerce.",
+                                    "title": "Approval Token",
+                                    "type": "string"
+                                },
+                                "approved_content_hash": {
+                                    "description": "sha256 of the exact approved post-redaction bytes (\u00a78.4). Strict.",
+                                    "title": "Approved Content Hash",
+                                    "type": "string"
+                                }
+                            },
+                            "required": [
+                                "pack_id",
+                                "pack_version",
+                                "case_id",
+                                "record_ref",
+                                "span",
+                                "rule_id",
+                                "citation",
+                                "rationale",
+                                "test_result",
+                                "decision",
+                                "officer",
+                                "decided_at",
+                                "approval_token",
+                                "approved_content_hash"
+                            ],
+                            "title": "ApprovedRedaction",
+                            "type": "object"
+                        },
+                        "title": "Approved",
+                        "type": "array"
+                    },
                     "proposals": {
-                        "description": "Every proposed withholding across all records (each \u00a78.3-validated, confidence DERIVED).",
+                        "description": "Every proposed withholding across all records (each \u00a78.3-validated, confidence DERIVED). Audit trail.",
                         "items": {
                             "additionalProperties": false,
                             "description": "A proposed withholding from the Review & Redaction agent (\u00a73, \u00a78.1, \u00a78.3, \u00a710).\n\nThe hero contract. Every field that grounds a withholding is here: the\n`rule_id` (validated \u2208 the PolicyProvider's returned set, \u00a78.3), the\n`citation` and `rationale` (source-grounded, foreseeable-harm), the generic\n`test_result`, and the DERIVED `confidence`. `retrieved_corrections` are\nadvisory only and surface into human review (\u00a77); they never set rule_id or\nconfidence.",
@@ -508,6 +770,13 @@
                         "metadata": {}
                     },
                     {
+                        "id": "approval_gate",
+                        "name": "approval_gate",
+                        "type": "node",
+                        "subgraph": null,
+                        "metadata": {}
+                    },
+                    {
                         "id": "__end__",
                         "name": "__end__",
                         "type": "__end__",
@@ -522,12 +791,17 @@
                         "label": null
                     },
                     {
+                        "source": "assemble",
+                        "target": "approval_gate",
+                        "label": null
+                    },
+                    {
                         "source": "review",
                         "target": "assemble",
                         "label": null
                     },
                     {
-                        "source": "assemble",
+                        "source": "approval_gate",
                         "target": "__end__",
                         "label": null
                     }

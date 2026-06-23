@@ -42,13 +42,17 @@ from shared.contracts import (
     release_key,
 )
 from shared.release import ReleaseGuardResult, check_release_integrity
+from shared.release.mask import REDACTION_CHAR, apply_mask
 
 # Demo redaction-application convention: the approved span's characters are
 # replaced 1:1 with this marker character, so the redaction is non-removable
 # (the original bytes are gone from the released artifact) and the byte length
-# is preserved (offsets of later spans on the same record stay valid). Logged in
-# ASSUMPTIONS.md.
-_REDACTION_CHAR = "█"  # FULL BLOCK '█'
+# is preserved (offsets of later spans on the same record stay valid). The
+# convention now lives in `shared/release/mask.py` so the Review & Redaction
+# agent computes the IDENTICAL `approved_content_hash` it re-checks here (one
+# source of truth for the §8.4 chain). Re-exported as `_REDACTION_CHAR` for the
+# existing tests that import it from this module.
+_REDACTION_CHAR = REDACTION_CHAR  # FULL BLOCK '█'
 
 
 def _sha256_hex(data: bytes) -> str:
@@ -88,19 +92,17 @@ def _apply_redactions_to_record(
 ) -> str:
     """Replace each approved/edited span's chars with the marker, length-preserving.
 
-    Rejected redactions are skipped (their bytes stay in the record). Spans are
-    applied right-to-left so earlier offsets are not shifted (length is preserved
-    anyway, but right-to-left is robust if that ever changes).
+    Rejected redactions are skipped (their bytes stay in the record — the
+    disclosure default). Delegates the actual masking to the shared
+    `apply_mask` (the §8.4 single source of truth) so the bytes — and therefore
+    the hash — match what the Review agent computed at the approval gate.
     """
-    applied = [r for r in redactions if r.decision in ("approved", "edited")]
-    chars = list(source_text)
-    for ar in sorted(applied, key=lambda r: _effective_span(r)[0], reverse=True):
-        start, end = _effective_span(ar)
-        start = max(0, start)
-        end = min(len(chars), end)
-        for i in range(start, end):
-            chars[i] = _REDACTION_CHAR
-    return "".join(chars)
+    spans = [
+        _effective_span(r)
+        for r in redactions
+        if r.decision in ("approved", "edited")
+    ]
+    return apply_mask(source_text, spans)
 
 
 def assemble_release(
