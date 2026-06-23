@@ -75,6 +75,8 @@ You need access to the **staging** tenant `hackathon26_632` / `DefaultTenant` to
 
 ## How to build, run, test, deploy
 
+> **Setting up a new machine?** Follow [`docs/dev-setup.md`](docs/dev-setup.md) first (install `uv`, get the `uipath` CLI, authenticate, create `.env`). The commands below assume that's done.
+
 ```bash
 # One-time: Python env (uv) is at repo root (.venv); the agents have their own .venv too.
 # Secrets live in the repo-root .env (ANTHROPIC_API_KEY, UIPATH_*). Not committed.
