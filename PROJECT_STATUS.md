@@ -19,10 +19,36 @@
 |---|---|---|
 | **0 — platform check** | Verify Maestro Case, coded-agent deploy, Action Center, API Workflows; hello-world round-trip | ✅ **Done** (`docs/platform-check.md`, all blocking rows PASS) |
 | **1 — three agents** | Contracts + 4 seams; Intake/Scoping, Custodian/Search, Review & Redaction — each deploys & runs | ✅ **Done** — all three **live on the cloud** |
-| **2 — case spine** | Wire the agents through Maestro Case; record-query + release steps; ≥1 Action Center approval | 🔶 **In progress** — groundwork + HITL gate done; Maestro authoring + API Workflows + Action Center app remain |
+| **2 — case spine** | Wire the agents through Maestro Case; record-query + release steps; ≥1 Action Center approval | 🔶 **In progress** — **Journey-A spine GREEN end-to-end on the cloud** (scoping → custodian → `record-query` API Workflow → review, 2026-06-25); `record-query` API Workflow built+published; **`release` API Workflow built but NOT published — blocked by a platform pack/publish outage** (see "Current state" below). **Remaining:** publish+wire `release`, Action Center app + HITL Review re-deploy |
 | **3 — three journeys** | A (fast-track), B (clarification/tolling/silence), C (redaction governance) on seeded data | ⬜ Not started |
 | **4 — safeguards** | Typed validation, idempotency, release-integrity guard, audit timeline | 🔶 Built in code; needs Maestro wiring |
 | **5 — polish** | Portal, corrections-memory retrieval, self-consistency, DU, Drive, **video + deck** | ⬜ Not started |
+
+---
+
+## ⏸️ Current state & resume point (last session: 2026-06-26)
+
+**Where the Maestro build actually is** (the live cloud solution is **Studio Web → "Solution 7"**, owned by `vikramiyer4@gmail.com`; the case project inside it is **`DisclosureFlow`**):
+
+- ✅ **Journey-A spine runs GREEN end-to-end on Maestro Case.** Verified live (`CaseId CASE-37087147`): `scoping-agent` → `custodian-search-agent` → **`record-query` API Workflow** → `review-redaction-agent`. Review consumes the real record-query output (the temporary seed was removed). This run is **saved in the case History** and is demoable as-is.
+- ✅ **`record-query` API Workflow** — built (`Script → Response`, deterministic; returns the canonical Journey-A `CandidateRecord`), **published**, wired into Stage 2 (after custodian), verified.
+- 🔶 **`release` API Workflow** — **fully built** (`Script → Response`, returns a valid `ReleasePackage`: `applied_redactions: []` for Journey A, canonical `package_hash`, pack stamp `federal-foia`/`2025.06.0`). **Logic verified in the editor preview.** **NOT published and NOT wired** — blocked only by the outage below. **`applied_redactions` array Item was set to `String`** (an untyped array can break the solution pack).
+- 🟨 **Storage Bucket `disclosureflows-record`** (folder `Shared`) created with `REC-A-0001.txt` at root — reserved for the P2 "real bucket read" upgrade; **not used by the current deterministic record-query** (see `ASSUMPTIONS.md`).
+- 🗑️ A stray empty **`Maestro BPMN` / `Process.bpmn`** project exists in Solution 7 (accidental, from the first "Start modeling"). Harmless; delete when convenient.
+
+### 🚧 BLOCKER (platform-side, NOT our content) — UiPath staging pack/publish outage
+- **Symptom:** `Publish` and `Debug on cloud` (both need the solution *pack* step) fail with **`Failed to pack from snapshot: Solution pack failed: No solution tool factory is registered`**; a fresh attempt surfaced the clearer **`Cannot publish while the RPA server connection needs recovery.`**
+- **Proven platform-side, not our project,** by elimination: (1) a **brand-new throwaway solution with a single trivial `Response`** failed to publish identically; (2) full **re-auth / re-login did not fix it**; (3) the **runtime is healthy** — already-deployed jobs keep succeeding in Orchestrator → Monitoring (so the *build/pack* service is the degraded part, separate from execution). Nothing in our content changed in a way that removes a packer factory.
+- **What's blocked:** all `Publish` + `Debug on cloud` (new deploys, fresh cloud runs). **What still works:** authoring/saving in Studio Web, and the runtime of already-deployed packages. Possibly-unaffected path: the **coded-agent CLI deploy** (`make publish` → `uipath publish` uploads a package straight to Orchestrator, a *different* path than the Studio Web solution packager) — worth trying for the HITL Review re-deploy.
+- **Recovery is UiPath-side:** retry `Publish` every ~20–30 min; check status.uipath.com. It was flapping (jobs succeeded minutes apart), so likely temporary.
+
+### ▶️ RESUME POINT (do this first when pack/publish is back)
+1. **Publish `release`** (Studio Web → Solution 7 → `release` → Publish → Shared → 1.0.0).
+2. **Wire `release` as the Release stage**: add a new stage after Stage 3 (Review) → `Add task → API workflow → release`; bind inputs `case_id` / `jurisdiction` from **Stage 1 → scoping-agent** outputs (no other inputs needed — Journey A has 0 approved redactions).
+3. **Run Journey A fully** via `Debug on cloud` → confirm scoping → custodian → record-query → review → **release** all green. That **closes Journey A end-to-end.**
+4. Then the next P0 tracks (see task board): **Action Center app + HITL Review re-deploy** (Journey C), then **Journey B branches + timers + requester-reply event**.
+
+**API-Workflow build recipe** (reuse for any future deterministic step), captured in the Platform-gotchas list below.
 
 ---
 
@@ -70,6 +96,9 @@ You need access to the **staging** tenant `hackathon26_632` / `DefaultTenant` to
 - **Invoke via the SDK/httpx transport, not raw `curl`** — raw `StartJobs` is WAF-blocked (code 1010). Use header `x-uipath-folderkey: <folder key>`.
 - **Auth token is ~1h-lived.** Re-`uipath auth --staging` (or refresh) before long publish/invoke sessions.
 - **`uipath run` loads the *agent dir's* `.env`** (which is empty); for a live local run, source the root `.env` first.
+- **Studio Web "Debug on cloud" failing at *Restore* with `Failed to download N file(s)… Reason: Unknown, Message: orchestrator unknown`** = a **stale auth/session token** after a long Studio Web session (the solution build can't fetch the referenced agent `.nupkg`s from the feed). Fix: **hard-refresh (Cmd+Shift+R) / re-log into Automation Cloud, then re-run.** Not a wiring or feed-config problem — it cleared instantly on re-auth (confirmed 2026-06-25).
+- **record-query / release API Workflows (Studio Web):** the Case "Add task" palette has **no Storage/Hash activities** and **`Execute script` is JS-only** (no Python). The doc-blessed approach (brief §7: "the realism that matters is the fan-out + controllable response, not the medium") is a deterministic **`Script` → `Response`** workflow: a JS `Script` returns `{records:[...]}` referencing inputs as `$input.<name>`; the `Response` returns it via `$context.outputs.<ScriptName>` (grab the exact ref from `{x} Insert variable` — it's `Javascript_1`-style, not `.result`). The real Storage-Bucket read is **P2 polish**. `content_hash` uses the canonical fixture value (no live hashing). **Array outputs MUST have a typed `Item`** (an untyped/default-Item array can break the solution pack).
+- **`Publish` / `Debug on cloud` failing with `No solution tool factory is registered` or `Cannot publish while the RPA server connection needs recovery`** = a **UiPath staging build/pack-service outage**, *not your content*. Confirm by clean-room test: publish a brand-new throwaway solution with one trivial `Response` — if *that* fails too, it's platform-side (runtime jobs keep succeeding because execution is a separate service). Re-auth does **not** fix it. Recovery is UiPath-side: retry every ~20–30 min, check status.uipath.com. (Hit 2026-06-26, blocked publishing `release`.)
 
 ---
 

@@ -200,11 +200,25 @@ The two **API Workflows** (record query, release) and the **Action Center review
 
 UiPath Maestro Case product docs are not in Context7. The following are named from the brief + the tenant's verified PASS capabilities; confirm exact element names/behaviors in Studio Web before authoring. **None is architecturally load-bearing** — if a name differs, the mapping in §1 still holds.
 
-- Maestro **stage manager** stages (§1) — confirm the case-stage construct and how a stage advances on a Service-Task completion event.
-- Maestro **User Task** element (§3b, §3c) — confirm it surfaces in Action Center and how it writes its decision back to case data.
-- **BPMN boundary / escape timer events** for tolling, grace-window expiry, custodian reminder/escalation (§4, §5.B) — confirm timer-event modeling on a stage/task and whether a timer can pause vs. re-route.
-- **Multi-instance Service Task** over `SearchTask[]` (§2b) — confirm multi-instance (fan-out) on a Service Task and its completion semantics (all-settled).
-- **Requester-reply event trigger** (§5.A) — confirm the external event mechanism (portal → Maestro) that wakes the clarification wait.
+### ✅ CONFIRMED in Studio Web — Phase-1 spike, 2026-06-23 (live `DisclosureFlow` Maestro Case, Stage-1 → scoping-agent, run Successful)
+
+- **Case project type exists.** `+ → Maestro Case` is a distinct project type (alongside Maestro BPMN, Agent, API Workflow, App, Escalation app, Function, RPA Workflow). Authoring surface is the **`Case plan`** tab; the engine is the native **`Case manager` (AI Orchestrator)** with a `Plan` / `Rules` toggle. (Resolves the GATE-1 spike concern — Case is real, not the BPMN fallback.)
+- **Stage construct = native `Stage` cards.** Start node (⚡) → Stage card → chain more stages. Each stage holds **tasks** ("Add first task"). The 6-stage spine maps directly.
+- **How a stage advances:** each task has a **`Required for stage completion`** toggle; a stage completes when its required tasks complete. Task trigger modes: **`Sequential`** (linear spine — use this) / `Event-triggered` / `Manually triggered`. Tasks also have **`Entry rules`** controlling when they activate, a **`Run only once`** toggle, and a stable task **ID** (e.g. `stage_1-tW2q0KP2o`).
+- **Agent task type:** "Add first task → **`Agent`**" is the "Start and wait for agent" equivalent (other types: `External agent`, `Agentic process`, `Wait for connector`, `Wait for timer`, Action, workflow, etc.). The agent picker lists the three deployed agents by name.
+- **Release/version binding:** binds by **agent NAME → latest published version** (a `Refresh` link, *no* pinned release-id field). ⚠ Implication: re-publishing an agent silently changes behavior; *good* news for the Review HITL re-deploy (auto-picks up, **no manual Stage-4 rebind needed**), but versions are not pinned.
+- **Inputs = flat named fields, not a JSON blob.** Studio Web reads the agent's typed schema and exposes each field individually. Scoping inputs: `request_id*, requester*, text*, submitted_at*, attachments` + **sibling `case_id`, `jurisdiction`** (the two not required) — confirms §C / §D-1: identity is sibling fields, *not* added onto `Request`. Each field toggles **literal value** vs **`@` expression/variable**.
+- **Outputs = flat named fields, auto-bound, NO `response` nesting.** Scoping outputs (Element-defined, each auto-bound to a same-named variable): `case_id, jurisdiction, request_id, track, subject, extracted_fields, record_types, departments_hint, is_vague, clarification_round, clarification` + an **`Error`** envelope. Field types shown via icon (`Tt` string, `{:}` object/list, toggle = bool, `123` number). There's also a **`User-defined`** outputs section (`+ Add new`) and an **`Update variables`** section for promoting task outputs to case/global variables.
+- **Native `CaseId`** is the real `case_id` (§C-3). Maestro auto-generates it (format `CASE-12345`, set via Case-plan properties → **Case ID** = `Constant prefix` "CASE" or `External key`). Spike auto-generated `CASE-29235877` and **ignored** the literal we passed — so in the real build, bind the `case_id` input to the **`CaseId` system variable**, not a literal. Native `stageHasRun_<stage>` flags exist (usable for idempotency / Run-only-once).
+- **Output-arg lag is a non-issue for the native Agent task.** Run completed Successful and output fields were populated when the task showed complete — the native task waits for the completion payload (the lag only bites custom `State`-polling glue).
+- **Data model is flat fields, not nested case objects.** Maestro favors flat auto-bound variables over a single `case.scoped : ScopedRequest` object (LOG-level adjustment to Phase 2). Wire stage→stage field-by-field via `Update variables`; the contract still validates *inside* each agent (`extra="forbid"`).
+
+### Still to verify in Studio Web
+
+- Maestro **User Task** element (§3b, §3c) — confirm it surfaces in Action Center and how it writes its decision back to case data. (Likely the **Action** task type + `hitlTask` output, per walkthrough §B.)
+- **Timer events** for tolling, grace-window expiry, custodian reminder/escalation (§4, §5.B) — the `Wait for timer` task type exists; confirm pause-vs-re-route and stage SLA/escalation behavior (the Stage card has a native **`SLA and escalations`** section worth probing).
+- **Multi-instance / fan-out** over `SearchTask[]` (§2b) — still unconfirmed; use the Python loop / single-call workflow for first-green (§D-7).
+- **Requester-reply event trigger** (§5.A) — `Wait for connector` task type exists; confirm it wakes a *running* case from a portal callback (the biggest remaining risk, §D-2).
 
 **Confirmed from current UiPath docs (`uipath-langchain-python/docs/human_in_the_loop.md`), not requiring Studio-Web verification:** `interrupt(CreateAction(...))` creates an Action Center task and resumes the agent on completion (§3a); `WaitAction` waits on an existing action; `InvokeProcess` lets an agent invoke an API Workflow/process and auto-resume. Agent job invocation via `processes.invoke` / `StartJobs` (§9).
 

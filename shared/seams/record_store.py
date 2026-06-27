@@ -51,6 +51,10 @@ def _sha256_bytes(data: bytes) -> str:
 # Default per-department demo behavior for the local backing. department -> status.
 # Logged in ASSUMPTIONS.md. Three departments give a fan-out with one happy path,
 # one silent (escalation), and one slow (reminder) by default; callers override.
+# NOTE: these generic names (hr/legal/field_office) are a bare fallback ONLY.
+# The real demo journeys use the canonical "Office of ..." department names and
+# their own behavior maps from demo-data/journeys.json, which OVERRIDE this dict.
+# Do not seed available_departments from this — use journeys.json's names.
 _DEFAULT_BEHAVIOR: dict[str, QueryStatus] = {
     "hr": "responded",
     "legal": "slow",
