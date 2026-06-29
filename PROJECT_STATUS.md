@@ -26,6 +26,24 @@
 
 ---
 
+## 🤝 HANDOFF — fastest path to a demo (read this first)
+
+**Done & demoable NOW:** Journey A, full spine green end-to-end on Maestro Case (scoping → custodian → `record-query` API Workflow → review → `release` API Workflow). Record this as the core demo.
+
+**Only Journey A is complete.** Journey C = groundwork only (HITL Review agent `0.0.2` deployed; Action Center app `DisclosureFlow_RedactionReview` scaffolded but the `decisions[]` output wiring is unfinished — blocked on editing auto-generated RPA `.xaml` handlers, an Array-vs-Dictionary type clash). Journey B = not started.
+
+**RECOMMENDED governance beat = release-integrity block (NOT the HITL Apps round-trip).** This is **doc-grounded**, not a shortcut:
+- [build-prompt.md:38](docs/build-prompt.md#L38) explicitly *prefers* "**release-integrity blocking** before approval or custodian silence escalating" as the visible beat.
+- The redaction-approval gate is "mandatory" ([design-brief.md:87](docs/design-brief.md#L87)) **as a mechanism — already built & locally verified** in the `0.0.2` agent (AGENTS.md). Mandate met; the *live Action Center round-trip* is a stretch, not required for the demo beat.
+- "≥1 Action Center approval works" ([build-prompt.md:18](docs/build-prompt.md#L18)) is satisfiable by a simpler **Maestro final-release User Task** (GATE-3), not the agent-interrupt app.
+
+**So, to finish for a demo (fastest):**
+1. Add the **§8.4 release-integrity check to the `release` API Workflow Script**: if a redaction lacks a valid approval token / hash doesn't verify → return a **BLOCKED** package (route to human) instead of releasing. Demo a tampered/unapproved redaction → release refuses. (Logic exists in `shared/release/integrity.py` / `steps/release_step.py` to mirror.)
+2. *(Optional, simpler Action Center approval)* add a **final-release Maestro User Task** before the release stage.
+3. *(Stretch, only if time)* finish the HITL Apps round-trip — see the Journey-C spec below for the exact remaining steps + the `decisions[]` wiring wall.
+
+---
+
 ## ✅ Current state & next focus (updated 2026-06-27)
 
 **JOURNEY A IS COMPLETE END-TO-END.** The full happy-path spine runs GREEN on Maestro Case (Studio Web "Solution 7" → `DisclosureFlow`): **Stage 1 scoping → Stage 2 custodian + `record-query` (API Workflow) → Stage 3 review → Stage 4 `release` (API Workflow)**. Both API Workflows are built (`Script → Response`, deterministic), published to `Shared`, and wired with cross-stage bindings (`case_id`/`jurisdiction` from scoping). The earlier pack/publish outage was the staging build/feed service **flapping** — it cleared by retrying (publish + `Debug on cloud` succeed when they catch a stable window; "Deploy resources before debugging" OFF helps dodge the agent-package re-download).
