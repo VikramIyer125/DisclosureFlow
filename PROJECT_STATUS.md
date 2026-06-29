@@ -19,14 +19,28 @@
 |---|---|---|
 | **0 — platform check** | Verify Maestro Case, coded-agent deploy, Action Center, API Workflows; hello-world round-trip | ✅ **Done** (`docs/platform-check.md`, all blocking rows PASS) |
 | **1 — three agents** | Contracts + 4 seams; Intake/Scoping, Custodian/Search, Review & Redaction — each deploys & runs | ✅ **Done** — all three **live on the cloud** |
-| **2 — case spine** | Wire the agents through Maestro Case; record-query + release steps; ≥1 Action Center approval | 🔶 **In progress** — **Journey-A spine GREEN end-to-end on the cloud** (scoping → custodian → `record-query` API Workflow → review, 2026-06-25); `record-query` API Workflow built+published; **`release` API Workflow built but NOT published — blocked by a platform pack/publish outage** (see "Current state" below). **Remaining:** publish+wire `release`, Action Center app + HITL Review re-deploy |
-| **3 — three journeys** | A (fast-track), B (clarification/tolling/silence), C (redaction governance) on seeded data | ⬜ Not started |
+| **2 — case spine** | Wire the agents through Maestro Case; record-query + release steps; ≥1 Action Center approval | 🔶 **Mostly done** — **Journey-A spine runs GREEN end-to-end (4 stages)**: scoping → custodian + `record-query` API Workflow → review → `release` API Workflow. Both API Workflows built, published, wired. **Remaining:** ≥1 Action Center approval (comes with Journey C HITL) |
+| **3 — three journeys** | A (fast-track), B (clarification/tolling/silence), C (redaction governance) on seeded data | 🔶 **Journey A ✅ DONE** (full spine green incl. release, 2026-06-27); **B & C not started** |
 | **4 — safeguards** | Typed validation, idempotency, release-integrity guard, audit timeline | 🔶 Built in code; needs Maestro wiring |
 | **5 — polish** | Portal, corrections-memory retrieval, self-consistency, DU, Drive, **video + deck** | ⬜ Not started |
 
 ---
 
-## ⏸️ Current state & resume point (last session: 2026-06-26)
+## ✅ Current state & next focus (updated 2026-06-27)
+
+**JOURNEY A IS COMPLETE END-TO-END.** The full happy-path spine runs GREEN on Maestro Case (Studio Web "Solution 7" → `DisclosureFlow`): **Stage 1 scoping → Stage 2 custodian + `record-query` (API Workflow) → Stage 3 review → Stage 4 `release` (API Workflow)**. Both API Workflows are built (`Script → Response`, deterministic), published to `Shared`, and wired with cross-stage bindings (`case_id`/`jurisdiction` from scoping). The earlier pack/publish outage was the staging build/feed service **flapping** — it cleared by retrying (publish + `Debug on cloud` succeed when they catch a stable window; "Deploy resources before debugging" OFF helps dodge the agent-package re-download).
+
+**Next focus → Journey C (governance hero), then Journey B.** See the task board below. Key gotcha learned: an API-workflow task in the case only exposes its inputs **after the workflow is published**; if a task shows "No inputs configured," publish the workflow, hard-refresh, then **delete + re-add the task** so it reads the published schema.
+
+### Journey C — what's done + the Action Center app spec (2026-06-27)
+- ✅ **HITL Review agent deployed**: `disclosureflow-review-redaction-agent` **`0.0.2`** published to the **tenant feed** (CLI path: `make pack` → `cd agents/review-redaction-agent && uipath publish --tenant`; CLI deploy works even when Studio Web pack is flaky). The thin **`0.0.1`** is still there; **the case Stage-3 review task still references `0.0.1`** — **repoint it to `0.0.2`** (Refresh the agent in the task, or delete+re-add) when ready for Journey C. (Journey A stays green on `0.0.1` meanwhile; and even on `0.0.2`, Journey A's clean records = 0 proposals = the interrupt is skipped.)
+- 🔶 **`DisclosureFlow_RedactionReview` Action Center app — STARTED, not finished.** The gating prerequisite: the agent's `interrupt(CreateEscalation(...))` targets it; without it a Journey-C run 401s on app lookup. Built from the **`+ → Escalation app` → "Simple Approval" template**. **Progress:** the app exists (currently named **`SimpleApprovalApp`**, page renamed `DisclosureFlow_RedactionReview`) and the **Action Schema is configured to match the agent contract**: Inputs `proposals` (Array<Object>) + `instructions` (Text); Output `decisions` (Array<Object>); Outcomes `approve`/`reject`. **REMAINING (the hard parts):** (1) **rename the APP itself to `DisclosureFlow_RedactionReview`** — the agent looks up the *app* name, not the page (or set env `REDACTION_REVIEW_APP_NAME=SimpleApprovalApp` on the agent); (2) **Generate page + build the form** to show proposals; (3) **the `decisions[]` output wiring** — turn an Approve click into `[{proposal_id, decision:"accept", revise:false}, …]` per proposal (the genuinely uncertain part in UiPath Apps — needs a collection expression on the submit rule); (4) **publish the app to `Shared`**. Name/folder constants live in `agents/review-redaction-agent/main.py` (`APPROVAL_APP_NAME`/`APPROVAL_APP_FOLDER`, env-overridable). **If the `decisions[]` wiring proves too costly, pivot to the brief's release-integrity-block governance beat instead.**
+  - **Action-schema INPUT** (what the agent sends as `CreateEscalation.data`): `idempotency_key: str`, `case_id: str`, `round: number`, `instructions: str`, and **`proposals: array`** of objects, each: `proposal_id: str`, `record_ref: str`, `rule_id: str`, `citation: str`, `span: {start:number, end:number, unit:str, quote:str}`, `rationale: str`, `test_result: object`, `confidence: {level:str, derivation:str}`, `decision_options: ["accept","reject","edit"]`, `full_individual_review_required: bool`.
+  - **Action-schema OUTPUT** (the officer's decision → resumes the agent): **`decisions: array`** of `{proposal_id: str, decision: "accept"|"reject"|"edit", edited_quote?: str, revise: bool, note?: str}`. Minimal demo form = show each proposal's rule/citation/rationale/quote + an accept/reject control → emit `decisions[]`.
+  - Resume mapping: the agent normalizes the completed task's output into `ApprovalResume{decisions:[OfficerDecision]}` (`main._normalize_resume`).
+- After the app exists + Stage-3 repointed to `0.0.2`: run **Journey C seed** (`agents/review-redaction-agent/fixtures/records_exemption_heavy.json` shape — b5/b6/b7c records) → review proposes redactions → **interrupt → Action Center task → officer approves → resume** → `release` applies them. Verify the §D-8 "paused agent" renders as "waiting on Action Center," not a hang.
+
+<details><summary>Earlier session note (2026-06-26) — the platform outage, now resolved</summary>
 
 **Where the Maestro build actually is** (the live cloud solution is **Studio Web → "Solution 7"**, owned by `vikramiyer4@gmail.com`; the case project inside it is **`DisclosureFlow`**):
 
@@ -49,6 +63,8 @@
 4. Then the next P0 tracks (see task board): **Action Center app + HITL Review re-deploy** (Journey C), then **Journey B branches + timers + requester-reply event**.
 
 **API-Workflow build recipe** (reuse for any future deterministic step), captured in the Platform-gotchas list below.
+
+</details>
 
 ---
 
