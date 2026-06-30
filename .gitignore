@@ -19,6 +19,10 @@ __uipath/
 *.db
 .uipath/
 
+# ── Portal runtime data ───────────────────────────────────────
+# One JSON per submitted request — runtime data, not source.
+portal/intake/
+
 # ── Python caches ─────────────────────────────────────────────
 __pycache__/
 *.py[cod]
